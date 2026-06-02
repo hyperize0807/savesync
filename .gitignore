@@ -1,0 +1,25 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- PyInstaller 빌드 산출물 ---
+# exe 는 GitHub Releases 로 배포한다 (repo 에 커밋하지 않음)
+build/
+dist/
+*.spec
+
+# --- 민감 정보 / 런타임 데이터 (실제로는 %APPDATA%\SaveSync 에 저장되지만 안전장치) ---
+credentials.json
+token.json
+config.json
+*.log
+
+# --- 에디터 / OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
