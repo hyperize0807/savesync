@@ -62,8 +62,20 @@ python -m savesync --settings
 `run_savesync.pyw` 의 바로가기를 만들어
 `shell:startup` (Win+R → 입력) 폴더에 넣으면 부팅 시 자동 상주합니다.
 
-### 단일 실행파일(.exe)로 빌드
-Python 설치 없이 배포하려면 PyInstaller 로 묶을 수 있습니다.
+### 단일 실행파일(.exe) 내려받기
+Python 설치 없이 쓰려면 [Releases](../../releases) 에서 최신 `SaveSync.exe` 를
+내려받으면 됩니다. 버전 태그(`vX.Y.Z`)를 push 할 때마다 GitHub Actions 가
+Windows 러너에서 빌드해 해당 릴리스에 자동 첨부합니다.
+
+```powershell
+# 새 버전 배포 (메인테이너)
+git tag v1.0.0
+git push origin v1.0.0
+# → .github/workflows/release.yml 가 exe 를 빌드해 Release 에 첨부
+```
+
+### 직접 빌드
+로컬에서 직접 묶으려면 PyInstaller 를 씁니다.
 
 ```powershell
 python -m pip install -r requirements-dev.txt
