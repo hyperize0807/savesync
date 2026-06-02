@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -45,6 +46,11 @@ class SettingsWindow:
             self.root = tk.Toplevel(master)
         self.root.title("SaveSync 설정")
         self.root.geometry("680x620")
+        try:
+            from . import appicon
+            self.root.iconbitmap(default=str(appicon.runtime_ico_path()))
+        except Exception:
+            pass
 
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
@@ -84,6 +90,15 @@ class SettingsWindow:
         btns.pack(fill="x", pady=4)
         ttk.Button(btns, text="추가", command=self._add_profile).pack(side="left")
         ttk.Button(btns, text="삭제", command=self._del_profile).pack(side="left", padx=4)
+
+        ttk.Separator(left, orient="horizontal").pack(fill="x", pady=(6, 4))
+        ttk.Label(left, text="다른 기기와 목록 공유", foreground="#666").pack(anchor="w")
+        cloud = ttk.Frame(left)
+        cloud.pack(fill="x", pady=4)
+        ttk.Button(cloud, text="드라이브로 내보내기",
+                   command=self._export_profiles).pack(fill="x")
+        ttk.Button(cloud, text="드라이브에서 가져오기",
+                   command=self._import_profiles).pack(fill="x", pady=(4, 0))
 
         right = ttk.Frame(f)
         right.pack(side="left", fill="both", expand=True, pady=4)
@@ -398,6 +413,101 @@ class SettingsWindow:
         config_mod.save(self.cfg)
         if self.on_save:
             self.on_save(self.cfg)
+
+    # ---------------- 프로필 목록 클라우드 공유 ----------------
+    def _require_auth(self) -> bool:
+        if not self.drive.is_authorized():
+            messagebox.showinfo(
+                "연결 필요", "먼저 '계정' 탭에서 Google Drive에 연결하세요.")
+            return False
+        return True
+
+    def _export_profiles(self):
+        """프로필 목록을 Google Drive의 SaveSync 루트에 내보낸다."""
+        if not self._require_auth():
+            return
+        self._apply_and_refresh()
+        if not self.cfg.profiles:
+            messagebox.showinfo("알림", "내보낼 프로필이 없습니다.")
+            return
+
+        def work():
+            try:
+                if self.drive.service is None:
+                    self.drive.connect(run_auth_flow=False)
+                # 각 프로필의 드라이브 폴더를 보장하고 ID를 수집(이름→ID)
+                name_to_id: dict[str, str] = {}
+                for p in self.cfg.profiles:
+                    folder_name = p.drive_folder_name or p.name
+                    name_to_id[p.name] = self.drive.ensure_profile_folder(folder_name)
+                self.root.after(0, lambda: self._finish_export(name_to_id))
+            except Exception as e:
+                self.root.after(
+                    0, lambda: messagebox.showerror("오류", f"내보내기 실패:\n{e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_export(self, name_to_id: dict[str, str]):
+        try:
+            for p in self.cfg.profiles:
+                if p.name in name_to_id:
+                    p.drive_folder_id = name_to_id[p.name]
+            payload = config_mod.export_profiles_payload(self.cfg)
+            text = json.dumps(payload, ensure_ascii=False, indent=2)
+            self.drive.upload_root_text(config_mod.PROFILES_BLOB_NAME, text)
+            config_mod.save(self.cfg)
+            if self.on_save:
+                self.on_save(self.cfg)
+            messagebox.showinfo(
+                "내보내기 완료",
+                f"{len(self.cfg.profiles)}개 프로필을 드라이브에 저장했습니다.\n"
+                "다른 기기에서 '드라이브에서 가져오기'로 불러올 수 있습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"내보내기 실패:\n{e}")
+
+    def _import_profiles(self):
+        """Google Drive의 SaveSync 루트에서 프로필 목록을 가져온다."""
+        if not self._require_auth():
+            return
+
+        def work():
+            try:
+                if self.drive.service is None:
+                    self.drive.connect(run_auth_flow=False)
+                text = self.drive.download_root_text(config_mod.PROFILES_BLOB_NAME)
+                self.root.after(0, lambda: self._finish_import(text))
+            except Exception as e:
+                self.root.after(
+                    0, lambda: messagebox.showerror("오류", f"가져오기 실패:\n{e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_import(self, text: str | None):
+        if text is None:
+            messagebox.showinfo(
+                "알림", "드라이브에 내보낸 프로필 목록이 없습니다.\n"
+                "먼저 다른 기기에서 '드라이브로 내보내기'를 실행하세요.")
+            return
+        try:
+            payload = json.loads(text)
+            added, updated = config_mod.merge_imported_profiles(self.cfg, payload)
+        except Exception as e:
+            messagebox.showerror("오류", f"프로필 목록을 읽을 수 없습니다:\n{e}")
+            return
+
+        self._refresh_profile_list()
+        if self.cfg.profiles:
+            self.profile_list.selection_clear(0, "end")
+            self.profile_list.selection_set(0)
+            self._load_selected_profile()
+        config_mod.save(self.cfg)
+        if self.on_save:
+            self.on_save(self.cfg)
+
+        need_local = [p.name for p in self.cfg.profiles if not p.local_folder.strip()]
+        msg = f"가져오기 완료 — 추가 {added}개 / 갱신 {updated}개"
+        if need_local:
+            msg += ("\n\n아래 프로필은 로컬 폴더를 지정해야 합니다:\n - "
+                    + "\n - ".join(need_local))
+        messagebox.showinfo("가져오기 완료", msg)
 
     def show(self):
         if self._owns_root:

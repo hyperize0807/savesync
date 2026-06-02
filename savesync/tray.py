@@ -16,29 +16,14 @@ from datetime import datetime
 from tkinter import messagebox
 
 import pystray
-from PIL import Image, ImageDraw
 
+from . import appicon
 from . import config as config_mod
 from . import logsetup
 from .config import CONFLICT_ASK
 from .drive import DriveClient
 from .gui import SettingsWindow
 from .scheduler import SyncScheduler
-
-
-def _make_icon_image() -> Image.Image:
-    """간단한 클라우드+화살표 느낌의 16색 아이콘 생성."""
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((6, 26, 38, 50), fill=(70, 130, 220, 255))
-    d.ellipse((26, 20, 58, 48), fill=(70, 130, 220, 255))
-    d.rectangle((14, 38, 50, 52), fill=(70, 130, 220, 255))
-    # 위아래 화살표(동기화)
-    d.polygon([(28, 30), (34, 30), (31, 24)], fill="white")
-    d.polygon([(30, 44), (36, 44), (33, 50)], fill="white")
-    d.rectangle((30, 30, 32, 45), fill="white")
-    d.rectangle((32, 30, 34, 45), fill="white")
-    return img
 
 
 class TrayApp:
@@ -51,6 +36,10 @@ class TrayApp:
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("SaveSync")
+        try:
+            self.root.iconbitmap(default=str(appicon.runtime_ico_path()))
+        except Exception:
+            pass
 
         self._settings: SettingsWindow | None = None
         self._ui_queue: queue.Queue = queue.Queue()
@@ -64,7 +53,7 @@ class TrayApp:
 
         self.icon = pystray.Icon(
             "savesync",
-            _make_icon_image(),
+            appicon.render(64),
             "SaveSync",
             menu=pystray.Menu(
                 pystray.MenuItem("설정 열기", self._menu_open_settings, default=True),

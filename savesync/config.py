@@ -17,6 +17,9 @@ CONFLICT_LOCAL = "local"   # 항상 로컬 → 드라이브
 CONFLICT_DRIVE = "drive"   # 항상 드라이브 → 로컬
 CONFLICT_ASK = "ask"       # 사용자에게 물어봄 (수동 동기화 시에만)
 
+# 프로필 목록을 내보낼 때 Google Drive 의 SaveSync 루트에 저장하는 파일 이름.
+PROFILES_BLOB_NAME = "savesync-profiles.json"
+
 
 @dataclass
 class Rules:
@@ -83,6 +86,49 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         return d
+
+
+def export_profiles_payload(cfg: Config) -> dict[str, Any]:
+    """프로필 목록을 이식 가능한 형태로 직렬화한다.
+
+    기기별 경로인 local_folder 는 제외하고, name/drive_folder_name/
+    drive_folder_id/enabled/rules 만 내보낸다. drive_folder_id 는 계정 단위로
+    모든 기기에서 동일하므로 함께 저장해 정확히 같은 폴더에 바인딩되게 한다.
+    """
+    profiles = []
+    for p in cfg.profiles:
+        d = asdict(p)
+        d.pop("local_folder", None)
+        profiles.append(d)
+    return {"version": 1, "profiles": profiles}
+
+
+def merge_imported_profiles(cfg: Config, payload: dict[str, Any]) -> tuple[int, int]:
+    """가져온 페이로드를 cfg.profiles 에 이름 기준으로 병합한다.
+
+    - 같은 이름 프로필: drive_folder_name/drive_folder_id/rules/enabled 갱신,
+      local_folder 는 보존 → updated
+    - 없던 프로필: 그대로 추가(local_folder 는 빈 값) → added
+
+    (added, updated) 개수를 반환하고 cfg.profiles 를 in-place 로 수정한다.
+    """
+    by_name = {p.name: p for p in cfg.profiles}
+    added = updated = 0
+    for d in payload.get("profiles", []):
+        incoming = Profile.from_dict(d)
+        existing = by_name.get(incoming.name)
+        if existing is not None:
+            existing.drive_folder_name = incoming.drive_folder_name
+            existing.drive_folder_id = incoming.drive_folder_id
+            existing.rules = incoming.rules
+            existing.enabled = incoming.enabled
+            updated += 1
+        else:
+            incoming.local_folder = ""
+            cfg.profiles.append(incoming)
+            by_name[incoming.name] = incoming
+            added += 1
+    return added, updated
 
 
 def load() -> Config:

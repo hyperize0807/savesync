@@ -13,12 +13,16 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "SaveSync 실행파일 빌드 시작..." -ForegroundColor Cyan
 
+# 앱 아이콘(.ico) 생성 → assets\savesync.ico
+python -m savesync.appicon
+
 python -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `
     --onefile `
     --name SaveSync `
+    --icon assets\savesync.ico `
     --collect-all googleapiclient `
     --collect-all google_auth_oauthlib `
     --collect-all google `

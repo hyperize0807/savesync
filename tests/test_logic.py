@@ -23,6 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from savesync import matcher
 from savesync.config import Config, Profile, Rules
 from savesync.config import CONFLICT_NEWER, CONFLICT_LOCAL, CONFLICT_DRIVE
+from savesync.config import (
+    export_profiles_payload, merge_imported_profiles, PROFILES_BLOB_NAME,
+)
 from savesync.syncengine import sync_profile
 
 _failures = []
@@ -173,9 +176,85 @@ def test_subfolders():
         check("slot1/a.sav" in drive.files, "하위 폴더 경로로 업로드됨")
 
 
+def test_export_omits_local_folder():
+    print("test_export_omits_local_folder")
+    cfg = Config(profiles=[
+        Profile(name="게임A", local_folder=r"C:\Saves\A",
+                drive_folder_name="A폴더", drive_folder_id="ID_A",
+                rules=Rules(include_extensions=[".sav"]), enabled=True),
+    ])
+    payload = export_profiles_payload(cfg)
+    p0 = payload["profiles"][0]
+    check(payload["version"] == 1, "version=1")
+    check("local_folder" not in p0, "local_folder 제외됨")
+    check(p0["name"] == "게임A", "name 보존")
+    check(p0["drive_folder_name"] == "A폴더", "drive_folder_name 보존")
+    check(p0["drive_folder_id"] == "ID_A", "drive_folder_id 포함")
+    check(p0["rules"]["include_extensions"] == [".sav"], "rules 보존")
+    assert "local_folder" not in p0
+
+
+def test_merge_by_name_preserves_local():
+    print("test_merge_by_name_preserves_local")
+    cfg = Config(profiles=[
+        Profile(name="게임A", local_folder=r"C:\old\A",
+                drive_folder_name="OLD", drive_folder_id="X",
+                rules=Rules(include_extensions=[".sav"]), enabled=True),
+    ])
+    payload = {"version": 1, "profiles": [{
+        "name": "게임A", "drive_folder_name": "NEW", "drive_folder_id": "Y",
+        "enabled": False, "rules": {"include_extensions": [".dat"]},
+    }]}
+    added, updated = merge_imported_profiles(cfg, payload)
+    p = cfg.profiles[0]
+    check((added, updated) == (0, 1), "동명=갱신(added0/updated1)")
+    check(p.local_folder == r"C:\old\A", "local_folder 보존")
+    check(p.drive_folder_name == "NEW", "drive_folder_name 갱신")
+    check(p.drive_folder_id == "Y", "drive_folder_id 갱신")
+    check(p.rules.include_extensions == [".dat"], "rules 갱신")
+    check(p.enabled is False, "enabled 갱신")
+    assert p.local_folder == r"C:\old\A"
+
+
+def test_merge_adds_new_with_empty_local():
+    print("test_merge_adds_new_with_empty_local")
+    cfg = Config(profiles=[])
+    payload = {"version": 1, "profiles": [{
+        "name": "신규", "drive_folder_name": "신규폴더", "drive_folder_id": "Z",
+        "enabled": True, "rules": {"include_extensions": [".sav"]},
+    }]}
+    added, updated = merge_imported_profiles(cfg, payload)
+    check((added, updated) == (1, 0), "신규=추가(added1/updated0)")
+    check(cfg.profiles[0].local_folder == "", "신규는 local_folder 빈 값")
+    assert cfg.profiles[0].local_folder == ""
+
+
+def test_export_import_round_trip():
+    print("test_export_import_round_trip")
+    src = Config(profiles=[
+        Profile(name="게임A", local_folder=r"C:\Saves\A",
+                drive_folder_name="A폴더", drive_folder_id="ID_A",
+                rules=Rules(include_extensions=[".sav"])),
+        Profile(name="게임B", local_folder=r"C:\Saves\B",
+                drive_folder_name="B폴더", drive_folder_id="ID_B"),
+    ])
+    payload = export_profiles_payload(src)
+    # 다른 기기: 빈 설정에 가져오기
+    dst = Config(profiles=[])
+    added, updated = merge_imported_profiles(dst, payload)
+    check((added, updated) == (2, 0), "라운드트립 2개 추가")
+    names = [p.name for p in dst.profiles]
+    check(names == ["게임A", "게임B"], "이름 순서/내용 복원")
+    check(all(p.local_folder == "" for p in dst.profiles), "로컬 폴더는 비어 있음")
+    check(dst.profiles[0].drive_folder_id == "ID_A", "폴더 ID 복원")
+    check(PROFILES_BLOB_NAME.endswith(".json"), "블롭 파일명 상수 확인")
+
+
 def main():
     for t in [test_matcher, test_new_files_both_ways, test_conflict_newer_local_wins,
-              test_conflict_newer_drive_wins, test_policy_force_local, test_subfolders]:
+              test_conflict_newer_drive_wins, test_policy_force_local, test_subfolders,
+              test_export_omits_local_folder, test_merge_by_name_preserves_local,
+              test_merge_adds_new_with_empty_local, test_export_import_round_trip]:
         t()
     print()
     if _failures:

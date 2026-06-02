@@ -244,3 +244,42 @@ class DriveClient:
             fileId=file_id, fields="modifiedTime", supportsAllDrives=True
         ).execute()
         return rfc3339_to_epoch(meta["modifiedTime"])
+
+    # ---------- SaveSync 루트의 메타 파일(JSON) ----------
+    def _find_child_file(self, parent_id: str, name: str) -> str | None:
+        """parent 아래에서 폴더가 아닌 파일을 이름으로 찾아 ID 반환(없으면 None)."""
+        q = (f"'{parent_id}' in parents and mimeType!='{FOLDER_MIME}' "
+             f"and name='{name.replace(chr(39), chr(92)+chr(39))}' and trashed=false")
+        res = self.service.files().list(
+            q=q, fields="files(id,name)", pageSize=1,
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
+        ).execute()
+        files = res.get("files", [])
+        return files[0]["id"] if files else None
+
+    def download_root_text(self, filename: str) -> str | None:
+        """SaveSync 루트의 텍스트 파일을 읽어 문자열로 반환(없으면 None)."""
+        self._ensure()
+        root = self._ensure_app_root()
+        fid = self._find_child_file(root, filename)
+        if fid is None:
+            return None
+        return self.download_bytes(fid).decode("utf-8")
+
+    def upload_root_text(self, filename: str, text: str,
+                         mime: str = "application/json") -> None:
+        """SaveSync 루트에 텍스트 파일을 만들거나 덮어쓴다(메모리 업로드)."""
+        self._ensure()
+        root = self._ensure_app_root()
+        media = MediaIoBaseUpload(
+            io.BytesIO(text.encode("utf-8")), mimetype=mime, resumable=True)
+        fid = self._find_child_file(root, filename)
+        if fid is None:
+            self.service.files().create(
+                body={"name": filename, "parents": [root]},
+                media_body=media, fields="id", supportsAllDrives=True,
+            ).execute()
+        else:
+            self.service.files().update(
+                fileId=fid, media_body=media, supportsAllDrives=True,
+            ).execute()
