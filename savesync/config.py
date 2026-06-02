@@ -62,6 +62,7 @@ class Profile:
 class Config:
     profiles: list[Profile] = field(default_factory=list)
     conflict_policy: str = CONFLICT_NEWER
+    auto_sync_enabled: bool = True   # 주기 자동 동기화 사용 여부 (끄면 수동만)
     interval_minutes: int = 60
     backup_enabled: bool = True
     backup_dir: str = ""
@@ -72,6 +73,7 @@ class Config:
         return Config(
             profiles=[Profile.from_dict(p) for p in d.get("profiles", [])],
             conflict_policy=d.get("conflict_policy", CONFLICT_NEWER),
+            auto_sync_enabled=bool(d.get("auto_sync_enabled", True)),
             interval_minutes=int(d.get("interval_minutes", 60)),
             backup_enabled=bool(d.get("backup_enabled", True)),
             backup_dir=d.get("backup_dir", ""),

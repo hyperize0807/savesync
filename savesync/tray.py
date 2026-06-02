@@ -12,6 +12,7 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox
 
 import pystray
@@ -76,33 +77,51 @@ class TrayApp:
             ),
         )
         self._last_summary = "아직 동기화 안 됨"
+        self._last_time = ""
 
     # ---------- 로깅/알림 ----------
     def _log_and_notify(self, msg: str):
         self.log.info(msg)
 
+    def _last_line(self) -> str:
+        """마지막 동기화 시각 + 요약 (메뉴/로그 탭 공용 표시 문자열)."""
+        return f"[{self._last_time}] {self._last_summary}" if self._last_time else self._last_summary
+
     def _last_status(self) -> str:
-        return self._last_summary
+        return self._last_line()
 
     def _on_cycle_done(self, results):
-        parts = [r.summary() for r in results] or ["대상 프로필 없음"]
-        self._last_summary = " | ".join(parts)
+        # 실제 변경이 있었던 프로필만 추려, 알림에 프로필명을 명시한다.
+        active = [r for r in results if r.has_activity()]
         error_count = sum(len(r.errors) for r in results)
+
+        # 트레이 메뉴 '마지막' 표시용 한 줄 요약
+        if active:
+            self._last_summary = " | ".join(f"{r.name}: {r.summary()}" for r in active)
+        elif results:
+            self._last_summary = "변경 없음"
+        else:
+            self._last_summary = "대상 프로필 없음"
+        self._last_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         try:
             self.icon.update_menu()
             if error_count:
+                err_names = ", ".join(r.name for r in results if r.errors)
                 self.icon.notify(
-                    f"오류 {error_count}건 발생 — 설정 > 로그 탭 확인\n{self._last_summary}",
+                    f"오류 {error_count}건 ({err_names}) — 설정 > 로그 탭 확인",
                     "SaveSync 동기화 (오류 있음)",
                 )
-            else:
-                self.icon.notify(self._last_summary, "SaveSync 동기화 완료")
+            elif active:
+                body = "\n".join(f"{r.name}: {r.summary()}" for r in active)
+                self.icon.notify(body, "SaveSync 동기화 완료")
+            # 변경이 없으면 알림을 띄우지 않는다(불필요한 알림 방지).
         except Exception:
             pass
         # 설정 창이 열려 있으면 결과/로그 갱신
         if self._settings is not None:
             try:
-                self._settings.last_result_summary = self._last_summary
+                self._settings.last_result_summary = self._last_line()
                 self.root.after(0, self._settings._refresh_log)
             except Exception:
                 pass
@@ -128,7 +147,7 @@ class TrayApp:
             on_save=self._on_settings_saved,
             on_sync_now=self._sync_now,
             master=self.root,
-            last_result_summary=self._last_summary,
+            last_result_summary=self._last_line(),
         )
         self._settings.show()
 

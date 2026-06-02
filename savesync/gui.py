@@ -229,20 +229,31 @@ class SettingsWindow:
         ttk.Combobox(f, textvariable=self.v_policy, state="readonly",
                      values=list(POLICY_LABELS.values()), width=40).grid(row=0, column=1, sticky="w", **pad)
 
-        ttk.Label(f, text="자동 동기화 주기 (분)").grid(row=1, column=0, sticky="w", **pad)
+        self.v_auto_sync = tk.BooleanVar(value=self.cfg.auto_sync_enabled)
+        ttk.Checkbutton(f, text="자동 동기화 사용 (끄면 '지금 동기화'로 수동 실행만)",
+                        variable=self.v_auto_sync, command=self._on_auto_sync_toggle).grid(
+            row=1, column=0, columnspan=2, sticky="w", **pad)
+
+        ttk.Label(f, text="자동 동기화 주기 (분)").grid(row=2, column=0, sticky="w", **pad)
         self.v_interval = tk.IntVar(value=self.cfg.interval_minutes)
-        ttk.Spinbox(f, from_=1, to=1440, textvariable=self.v_interval, width=8).grid(row=1, column=1, sticky="w", **pad)
+        self._interval_spin = ttk.Spinbox(f, from_=1, to=1440, textvariable=self.v_interval, width=8)
+        self._interval_spin.grid(row=2, column=1, sticky="w", **pad)
 
         self.v_backup = tk.BooleanVar(value=self.cfg.backup_enabled)
-        ttk.Checkbutton(f, text="덮어쓰기 전 항상 백업", variable=self.v_backup).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Checkbutton(f, text="덮어쓰기 전 항상 백업", variable=self.v_backup).grid(row=3, column=0, columnspan=2, sticky="w", **pad)
 
-        ttk.Label(f, text="백업 폴더").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Label(f, text="백업 폴더").grid(row=4, column=0, sticky="w", **pad)
         self.v_backup_dir = tk.StringVar(value=self.cfg.backup_dir)
-        ttk.Entry(f, textvariable=self.v_backup_dir, width=44).grid(row=3, column=1, sticky="we", **pad)
-        ttk.Button(f, text="찾기…", command=self._browse_backup).grid(row=3, column=2, **pad)
+        ttk.Entry(f, textvariable=self.v_backup_dir, width=44).grid(row=4, column=1, sticky="we", **pad)
+        ttk.Button(f, text="찾기…", command=self._browse_backup).grid(row=4, column=2, **pad)
 
         ttk.Label(f, text=f"설정 파일: {paths.config_path()}", foreground="#888").grid(
-            row=4, column=0, columnspan=3, sticky="w", **pad)
+            row=5, column=0, columnspan=3, sticky="w", **pad)
+
+        self._on_auto_sync_toggle()  # 초기 주기 입력란 활성/비활성 반영
+
+    def _on_auto_sync_toggle(self):
+        self._interval_spin.configure(state="normal" if self.v_auto_sync.get() else "disabled")
 
     def _browse_backup(self):
         d = filedialog.askdirectory(title="백업 폴더 선택")
@@ -335,19 +346,28 @@ class SettingsWindow:
     # ---------------- 저장 / 동기화 ----------------
     def _collect_general(self):
         self.cfg.conflict_policy = LABEL_TO_POLICY.get(self.v_policy.get(), CONFLICT_NEWER)
+        self.cfg.auto_sync_enabled = self.v_auto_sync.get()
         self.cfg.interval_minutes = max(1, int(self.v_interval.get()))
         self.cfg.backup_enabled = self.v_backup.get()
         self.cfg.backup_dir = self.v_backup_dir.get().strip() or str(paths.default_backup_dir())
 
     def _save(self):
-        # 현재 편집 중인 프로필 필드도 반영
-        if self._selected_index() is not None:
-            self._apply_profile_fields_silent()
+        # 현재 편집 중인 프로필 필드를 반영하고 목록(이름 등)을 즉시 갱신
+        self._apply_and_refresh()
         self._collect_general()
         config_mod.save(self.cfg)
         if self.on_save:
             self.on_save(self.cfg)
         messagebox.showinfo("저장됨", "설정을 저장했습니다.")
+
+    def _apply_and_refresh(self):
+        """편집 중인 프로필 입력을 반영하고 목록(이름 등)을 즉시 갱신한다."""
+        i = self._selected_index()
+        if i is None:
+            return
+        self._apply_profile_fields_silent()
+        self._refresh_profile_list()
+        self.profile_list.selection_set(i)
 
     def _apply_profile_fields_silent(self):
         i = self._selected_index()
@@ -373,8 +393,7 @@ class SettingsWindow:
             messagebox.showinfo("동기화", "동기화를 시작했습니다. (트레이 로그/알림 참고)")
 
     def _save_quiet(self):
-        if self._selected_index() is not None:
-            self._apply_profile_fields_silent()
+        self._apply_and_refresh()
         self._collect_general()
         config_mod.save(self.cfg)
         if self.on_save:

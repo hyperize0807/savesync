@@ -60,8 +60,12 @@ class SyncScheduler:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            self._run_once()
-            interval = max(1, self.get_config().interval_minutes)
+            cfg = self.get_config()
+            # 자동 동기화가 꺼져 있으면 타이머 실행을 건너뛴다.
+            # (수동 '지금 동기화'는 run_sync() 로 직접 호출되어 항상 동작한다.)
+            if cfg.auto_sync_enabled:
+                self._run_once()
+            interval = max(1, cfg.interval_minutes)
             # interval 분 동안 대기하되, trigger/stop 이 오면 즉시 깨어남
             self._wake.wait(timeout=interval * 60)
             self._wake.clear()

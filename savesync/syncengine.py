@@ -39,6 +39,7 @@ ConflictResolver = Callable[[str, float, float], str]
 
 @dataclass
 class SyncStats:
+    name: str = ""               # 프로필 이름 (알림/로그 표시용)
     uploaded_new: int = 0
     downloaded_new: int = 0
     uploaded_overwrite: int = 0
@@ -47,6 +48,12 @@ class SyncStats:
     backed_up: int = 0
     conflicts_resolved: int = 0
     errors: list[str] = field(default_factory=list)
+
+    def has_activity(self) -> bool:
+        """실제로 업로드/다운로드/덮어쓰기 등 변경이 있었는지(변경 없음=False)."""
+        return any((self.uploaded_new, self.downloaded_new,
+                    self.uploaded_overwrite, self.downloaded_overwrite,
+                    self.backed_up))
 
     def summary(self) -> str:
         return (
@@ -68,7 +75,7 @@ def sync_profile(
     log: Callable[[str], None] = lambda m: None,
     on_conflict: ConflictResolver | None = None,
 ) -> SyncStats:
-    stats = SyncStats()
+    stats = SyncStats(name=profile.name)
 
     local_root = Path(profile.local_folder)
     if not local_root.is_dir():
