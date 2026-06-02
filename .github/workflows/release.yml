@@ -25,6 +25,17 @@ jobs:
       - name: 의존성 설치
         run: python -m pip install -r requirements-dev.txt
 
+      - name: 버전 태그 검증
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v',''
+          $ver = python -c "import re; print(re.search(r'__version__\s*=\s*\""([^\""]+)\""', open('savesync/__init__.py', encoding='utf-8').read()).group(1))"
+          if ($tag -ne $ver) {
+            Write-Error "푸시된 태그($tag) 와 __version__($ver) 이 일치하지 않습니다. savesync/__init__.py 의 __version__ 을 맞춰주세요."
+            exit 1
+          }
+          Write-Host "버전 일치: $ver"
+
       - name: OAuth 클라이언트 주입
         shell: pwsh
         env:

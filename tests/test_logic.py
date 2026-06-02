@@ -27,6 +27,7 @@ from savesync.config import (
     export_profiles_payload, merge_imported_profiles, PROFILES_BLOB_NAME,
 )
 from savesync.syncengine import sync_profile
+from savesync import updater
 
 _failures = []
 
@@ -250,11 +251,53 @@ def test_export_import_round_trip():
     check(PROFILES_BLOB_NAME.endswith(".json"), "블롭 파일명 상수 확인")
 
 
+def test_parse_version():
+    print("test_parse_version")
+    check(updater.parse_version("v1.2.3") == (1, 2, 3, 1), "v 접두사 제거")
+    check(updater.parse_version("1.2.3") == (1, 2, 3, 1), "v 없이도 동작")
+    check(updater.parse_version("v1.2") == (1, 2, 0, 1), "누락 자리 0 보정")
+    check(updater.parse_version("1") == (1, 0, 0, 1), "한 자리도 보정")
+    check(updater.parse_version("v1.2.3-rc1")[:3] == (1, 2, 3), "프리릴리스 코어 파싱")
+    check(updater.parse_version("v1.2.3-rc1")[3] == 0, "프리릴리스 랭크 0")
+    check(updater.parse_version("v1.2.3")[3] == 1, "정식 랭크 1")
+    check(updater.parse_version("garbage") == (0, 0, 0, 1), "비숫자는 0")
+
+
+def test_is_newer():
+    print("test_is_newer")
+    check(updater.is_newer("v1.0.2", "1.0.1") is True, "1.0.2 > 1.0.1")
+    check(updater.is_newer("v1.0.1", "1.0.2") is False, "1.0.1 < 1.0.2")
+    check(updater.is_newer("v1.0.2", "1.0.2") is False, "동일은 새 버전 아님")
+    check(updater.is_newer("v1.0.2", "1.0.2-rc1") is True, "정식 > 같은 코어 프리릴리스")
+    check(updater.is_newer("garbage", "1.0.2") is False, "잘못된 latest 는 False(안전)")
+
+
+def test_pick_asset():
+    print("test_pick_asset")
+    assets = [{"name": "other.zip"}, {"name": "SaveSync.exe", "size": 100}]
+    picked = updater.pick_asset(assets)
+    check(picked is not None and picked["size"] == 100, "SaveSync.exe 선택")
+    check(updater.pick_asset([{"name": "x"}]) is None, "없으면 None")
+    check(updater.pick_asset([]) is None, "빈 목록은 None")
+
+
+def test_render_update_script():
+    print("test_render_update_script")
+    s = updater.render_update_script()
+    check('tasklist /FI "PID eq %PID%"' in s, "PID 종료 대기 루프 포함")
+    check('move /y "%NEW%" "%OLD%"' in s, "move /y 교체 포함")
+    check('start "" "%OLD%"' in s, "재실행 포함")
+    check('del "%~f0"' in s, "자기 삭제 idiom 포함")
+    check("%~1" in s and "%~2" in s and "%~3" in s, "argv(%~1..3) 참조")
+
+
 def main():
     for t in [test_matcher, test_new_files_both_ways, test_conflict_newer_local_wins,
               test_conflict_newer_drive_wins, test_policy_force_local, test_subfolders,
               test_export_omits_local_folder, test_merge_by_name_preserves_local,
-              test_merge_adds_new_with_empty_local, test_export_import_round_trip]:
+              test_merge_adds_new_with_empty_local, test_export_import_round_trip,
+              test_parse_version, test_is_newer, test_pick_asset,
+              test_render_update_script]:
         t()
     print()
     if _failures:

@@ -137,6 +137,7 @@ class TrayApp:
             on_sync_now=self._sync_now,
             master=self.root,
             last_result_summary=self._last_line(),
+            on_quit=lambda: self.root.after(0, self._quit),
         )
         self._settings.show()
 

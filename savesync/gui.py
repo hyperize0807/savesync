@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import filedialog, messagebox, ttk
 
 from . import config as config_mod
+from . import updater
 from .config import (
     Config, Profile, Rules,
     CONFLICT_NEWER, CONFLICT_LOCAL, CONFLICT_DRIVE, CONFLICT_ASK,
@@ -32,11 +34,12 @@ LABEL_TO_POLICY = {v: k for k, v in POLICY_LABELS.items()}
 class SettingsWindow:
     def __init__(self, cfg: Config, drive: DriveClient,
                  on_save=None, on_sync_now=None, master=None,
-                 last_result_summary: str = ""):
+                 last_result_summary: str = "", on_quit=None):
         self.cfg = cfg
         self.drive = drive
         self.on_save = on_save
         self.on_sync_now = on_sync_now
+        self.on_quit = on_quit
         self.last_result_summary = last_result_summary
         self._owns_root = master is None
 
@@ -264,6 +267,13 @@ class SettingsWindow:
 
         ttk.Label(f, text=f"설정 파일: {paths.config_path()}", foreground="#888").grid(
             row=5, column=0, columnspan=3, sticky="w", **pad)
+
+        ttk.Separator(f, orient="horizontal").grid(
+            row=6, column=0, columnspan=3, sticky="we", padx=10, pady=(10, 4))
+        ttk.Label(f, text=f"현재 버전: v{updater.__version__}").grid(
+            row=7, column=0, sticky="w", **pad)
+        self._update_btn = ttk.Button(f, text="업데이트 확인", command=self._check_update)
+        self._update_btn.grid(row=7, column=1, sticky="w", **pad)
 
         self._on_auto_sync_toggle()  # 초기 주기 입력란 활성/비활성 반영
 
@@ -508,6 +518,87 @@ class SettingsWindow:
             msg += ("\n\n아래 프로필은 로컬 폴더를 지정해야 합니다:\n - "
                     + "\n - ".join(need_local))
         messagebox.showinfo("가져오기 완료", msg)
+
+    # ---------------- 업데이트 ----------------
+    def _set_update_busy(self, busy: bool, label: str = "업데이트 확인"):
+        self._update_btn.config(text=label, state=("disabled" if busy else "normal"))
+
+    def _check_update(self):
+        """GitHub 최신 릴리스를 확인하고, 새 버전이 있으면 업데이트한다."""
+        self._set_update_busy(True, "확인 중…")
+
+        def work():
+            try:
+                rel = updater.get_latest_release()
+                self.root.after(0, lambda: self._on_latest_release(rel))
+            except Exception as e:
+                self.root.after(0, lambda: self._update_failed("업데이트 확인 실패", e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_failed(self, title: str, err: Exception):
+        self._set_update_busy(False)
+        messagebox.showerror("오류", f"{title}:\n{err}")
+
+    def _on_latest_release(self, rel: dict):
+        self._set_update_busy(False)
+        if not updater.is_newer(rel.get("tag", ""), updater.__version__):
+            messagebox.showinfo(
+                "업데이트", f"최신 버전입니다. (v{updater.__version__})")
+            return
+
+        tag = rel.get("tag", "")
+        # 소스 실행 등 비프로즌: exe 교체 불가 → 릴리스 페이지 안내
+        if not updater.is_frozen():
+            if messagebox.askyesno(
+                    "업데이트 있음",
+                    f"새 버전 {tag} 이 있습니다.\n"
+                    f"(현재 v{updater.__version__})\n\n"
+                    "릴리스 페이지를 열까요?"):
+                webbrowser.open(rel.get("html_url", updater.RELEASES_PAGE))
+            return
+
+        if not rel.get("exe_url"):
+            messagebox.showerror(
+                "오류", "릴리스에 SaveSync.exe 가 없어 업데이트할 수 없습니다.")
+            return
+        if not messagebox.askyesno(
+                "업데이트 있음",
+                f"새 버전 {tag} 이 있습니다. (현재 v{updater.__version__})\n\n"
+                "지금 다운로드하고 업데이트할까요?\n"
+                "업데이트하면 앱이 종료된 뒤 새 버전으로 다시 시작됩니다."):
+            return
+
+        self._set_update_busy(True, "다운로드 중…")
+
+        def work():
+            try:
+                new_exe = updater.download_asset(
+                    rel["exe_url"], expected_size=rel.get("size") or None)
+                self.root.after(0, lambda: self._apply_update(new_exe, rel))
+            except Exception as e:
+                self.root.after(0, lambda: self._update_failed("다운로드 실패", e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_update(self, new_exe, rel: dict):
+        try:
+            updater.spawn_updater(new_exe)
+        except updater.UpdateNotWritableError:
+            self._set_update_busy(False)
+            if messagebox.askyesno(
+                    "권한 필요",
+                    "설치 폴더에 쓸 수 없어 자동 교체할 수 없습니다.\n"
+                    "(예: Program Files 에 설치된 경우)\n\n"
+                    "릴리스 페이지를 열어 직접 받을까요?"):
+                webbrowser.open(rel.get("html_url", updater.RELEASES_PAGE))
+            return
+        except Exception as e:
+            self._update_failed("업데이트 적용 실패", e)
+            return
+        # 업데이터 .cmd 가 종료를 기다리므로 앱을 깔끔히 종료한다.
+        messagebox.showinfo(
+            "업데이트", "업데이트를 적용합니다. 앱이 종료된 뒤 자동으로 다시 시작됩니다.")
+        if self.on_quit:
+            self.on_quit()
 
     def show(self):
         if self._owns_root:

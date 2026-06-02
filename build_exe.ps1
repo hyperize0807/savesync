@@ -28,6 +28,7 @@ python -m PyInstaller `
     --collect-all google `
     --collect-all pystray `
     --collect-all PIL `
+    --collect-all certifi `
     run_savesync.pyw
 
 if ($LASTEXITCODE -eq 0) {
