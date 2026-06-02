@@ -28,9 +28,8 @@ jobs:
       - name: OAuth 클라이언트 주입
         shell: pwsh
         env:
-          # Secrets / Variables 어느 쪽에 등록해도 동작하도록 폴백.
-          CID: ${{ secrets.SAVESYNC_OAUTH_CLIENT_ID || vars.SAVESYNC_OAUTH_CLIENT_ID }}
-          CSECRET: ${{ secrets.SAVESYNC_OAUTH_CLIENT_SECRET || vars.SAVESYNC_OAUTH_CLIENT_SECRET }}
+          CID: ${{ secrets.SAVESYNC_OAUTH_CLIENT_ID }}
+          CSECRET: ${{ secrets.SAVESYNC_OAUTH_CLIENT_SECRET }}
         run: |
           if (-not $env:CID -or -not $env:CSECRET) {
             Write-Error "SAVESYNC_OAUTH_CLIENT_ID / SAVESYNC_OAUTH_CLIENT_SECRET 시크릿이 설정되지 않았습니다. (저장소 Settings → Secrets and variables → Actions)"
