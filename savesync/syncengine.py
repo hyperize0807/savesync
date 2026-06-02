@@ -74,9 +74,18 @@ def sync_profile(
     if not local_root.is_dir():
         stats.errors.append(f"로컬 폴더 없음: {profile.local_folder}")
         return stats
-    if not profile.drive_folder_id:
-        stats.errors.append("드라이브 폴더가 지정되지 않음")
-        return stats
+
+    # 드라이브 폴더 ID 확보: 미리 지정돼 있으면(테스트/캐시) 그대로 쓰고,
+    # 없으면 'SaveSync/<폴더이름>' 을 찾거나 만들어 그 ID 를 쓴다.
+    drive_folder_id = profile.drive_folder_id
+    if not drive_folder_id:
+        try:
+            drive_folder_id = drive.ensure_profile_folder(
+                profile.drive_folder_name or profile.name
+            )
+        except Exception as e:
+            stats.errors.append(f"드라이브 폴더 준비 실패: {e}")
+            return stats
 
     tol = cfg.mtime_tolerance_seconds
     backup = BackupSession(cfg.backup_dir, profile.name, cfg.backup_enabled)
@@ -86,7 +95,7 @@ def sync_profile(
         rel: (local_root / rel)
         for rel in matcher.iter_local_files(profile.local_folder, profile.rules)
     }
-    drive_all = drive.list_files_recursive(profile.drive_folder_id)
+    drive_all = drive.list_files_recursive(drive_folder_id)
     # 드라이브 쪽도 규칙으로 필터 (드라이브에 무관한 파일이 섞여 있을 수 있음)
     drive_files = {
         rel: meta for rel, meta in drive_all.items()
@@ -102,7 +111,7 @@ def sync_profile(
             in_drive = rel in drive_files
 
             if in_local and not in_drive:
-                drive.upload_new(profile.drive_folder_id, rel, local_files[rel])
+                drive.upload_new(drive_folder_id, rel, local_files[rel])
                 stats.uploaded_new += 1
                 log(f"  ↑ 신규 업로드: {rel}")
 

@@ -16,7 +16,7 @@ from .config import (
     Config, Profile, Rules,
     CONFLICT_NEWER, CONFLICT_LOCAL, CONFLICT_DRIVE, CONFLICT_ASK,
 )
-from .drive import DriveClient, DriveError
+from .drive import DriveClient
 from . import paths
 
 POLICY_LABELS = {
@@ -91,7 +91,6 @@ class SettingsWindow:
         self.v_name = tk.StringVar()
         self.v_enabled = tk.BooleanVar(value=True)
         self.v_local = tk.StringVar()
-        self.v_drive_id = tk.StringVar()
         self.v_drive_name = tk.StringVar()
         self.v_exts = tk.StringVar()
         self.v_incl = tk.StringVar()
@@ -110,14 +109,11 @@ class SettingsWindow:
         ttk.Button(right, text="찾기…", command=self._browse_local).grid(row=row, column=2, padx=4)
         row += 1
 
-        ttk.Label(right, text="드라이브 폴더 (URL/ID)").grid(row=row, column=0, sticky="w")
-        ttk.Entry(right, textvariable=self.v_drive_id, width=36).grid(row=row, column=1, sticky="we", pady=2)
-        dbtns = ttk.Frame(right)
-        dbtns.grid(row=row, column=2, padx=4)
-        ttk.Button(dbtns, text="확인", width=5, command=self._verify_drive).pack(side="left")
-        ttk.Button(dbtns, text="탐색…", width=6, command=self._browse_drive).pack(side="left", padx=(4, 0))
+        ttk.Label(right, text="드라이브 폴더 이름").grid(row=row, column=0, sticky="w")
+        ttk.Entry(right, textvariable=self.v_drive_name, width=36).grid(row=row, column=1, columnspan=2, sticky="we", pady=2)
         row += 1
-        ttk.Label(right, textvariable=self.v_drive_name, foreground="#0a7").grid(row=row, column=1, sticky="w")
+        ttk.Label(right, text="※ Google Drive의 'SaveSync' 폴더 아래에 이 이름으로 폴더가 만들어져 동기화됩니다. (비우면 프로필 이름 사용)",
+                  foreground="#888", wraplength=380, justify="left").grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
 
         ttk.Separator(right, orient="horizontal").grid(row=row, column=0, columnspan=3, sticky="we", pady=8)
@@ -191,8 +187,7 @@ class SettingsWindow:
         self.v_name.set(p.name)
         self.v_enabled.set(p.enabled)
         self.v_local.set(p.local_folder)
-        self.v_drive_id.set(p.drive_folder_id)
-        self.v_drive_name.set(f"→ {p.drive_folder_name}" if p.drive_folder_name else "")
+        self.v_drive_name.set(p.drive_folder_name or p.name)
         self.v_exts.set(", ".join(p.rules.include_extensions))
         self.v_incl.set(", ".join(p.rules.include_globs))
         self.v_excl.set(", ".join(p.rules.exclude_globs))
@@ -207,8 +202,8 @@ class SettingsWindow:
         p.name = self.v_name.get().strip() or p.name
         p.enabled = self.v_enabled.get()
         p.local_folder = self.v_local.get().strip()
-        p.drive_folder_id = self.v_drive_id.get().strip()
-        p.drive_folder_name = self.v_drive_name.get().replace("→ ", "").strip()
+        p.drive_folder_name = self.v_drive_name.get().strip()
+        p.drive_folder_id = ""  # 이름으로 매 동기화 시 해석/생성하므로 캐시를 비운다
         p.rules = Rules(
             include_extensions=_split_exts(self.v_exts.get()),
             include_globs=_split_csv(self.v_incl.get()),
@@ -223,38 +218,6 @@ class SettingsWindow:
         d = filedialog.askdirectory(title="로컬 세이브 폴더 선택")
         if d:
             self.v_local.set(d)
-
-    def _verify_drive(self):
-        val = self.v_drive_id.get().strip()
-        if not val:
-            return
-        if not self.drive.is_authorized():
-            messagebox.showwarning("인증 필요", "먼저 '계정' 탭에서 Google Drive에 연결하세요.")
-            return
-        try:
-            if self.drive.service is None:
-                self.drive.connect(run_auth_flow=False)
-            fid, name = self.drive.resolve_folder(val)
-            self.v_drive_id.set(fid)
-            self.v_drive_name.set(f"→ {name}")
-        except Exception as e:
-            messagebox.showerror("오류", f"드라이브 폴더 확인 실패:\n{e}")
-
-    def _browse_drive(self):
-        if not self.drive.is_authorized():
-            messagebox.showwarning("인증 필요", "먼저 '계정' 탭에서 Google Drive에 연결하세요.")
-            return
-        try:
-            if self.drive.service is None:
-                self.drive.connect(run_auth_flow=False)
-        except Exception as e:
-            messagebox.showerror("오류", f"드라이브 연결 실패:\n{e}")
-            return
-        picked = DriveFolderBrowser(self.root, self.drive).pick()
-        if picked:
-            fid, name = picked
-            self.v_drive_id.set(fid)
-            self.v_drive_name.set(f"→ {name}")
 
     # ---------------- 일반 탭 ----------------
     def _build_general_tab(self):
@@ -298,8 +261,9 @@ class SettingsWindow:
             row=1, column=0, sticky="w", **pad)
         ttk.Label(
             f,
-            text=("연결하려면 Google Cloud Console에서 '데스크톱 앱' OAuth 클라이언트를 만들고\n"
-                  f"credentials.json 파일을 아래 위치에 두세요:\n{paths.credentials_path()}"),
+            text=("'연결'을 누르면 브라우저가 열립니다. Google 로그인 후 동의하면 끝나며,\n"
+                  "이후에는 자동으로 로그인됩니다. (동기화 파일은 내 드라이브의 'SaveSync'\n"
+                  "폴더 아래에 저장됩니다.)"),
             foreground="#666", justify="left",
         ).grid(row=2, column=0, columnspan=2, sticky="w", **pad)
 
@@ -307,9 +271,10 @@ class SettingsWindow:
         if self.drive.is_authorized():
             self.v_account_status.set("상태: 인증됨 ✓")
         elif self.drive.has_credentials():
-            self.v_account_status.set("상태: credentials.json 있음 — 아직 인증 전")
+            self.v_account_status.set("상태: 아직 연결 안 됨 — 아래 '연결'을 누르세요")
         else:
-            self.v_account_status.set("상태: credentials.json 없음 — 아래 안내를 따르세요")
+            self.v_account_status.set(
+                "상태: 앱에 OAuth 클라이언트가 설정되지 않았습니다 (개발자 설정 필요)")
 
     def _connect_account(self):
         def work():
@@ -392,8 +357,8 @@ class SettingsWindow:
         p.name = self.v_name.get().strip() or p.name
         p.enabled = self.v_enabled.get()
         p.local_folder = self.v_local.get().strip()
-        p.drive_folder_id = self.v_drive_id.get().strip()
-        p.drive_folder_name = self.v_drive_name.get().replace("→ ", "").strip()
+        p.drive_folder_name = self.v_drive_name.get().strip()
+        p.drive_folder_id = ""  # 이름으로 매 동기화 시 해석/생성하므로 캐시를 비운다
         p.rules = Rules(
             include_extensions=_split_exts(self.v_exts.get()),
             include_globs=_split_csv(self.v_incl.get()),
@@ -421,77 +386,6 @@ class SettingsWindow:
         else:
             self.root.lift()
             self.root.focus_force()
-
-
-class DriveFolderBrowser:
-    """Google Drive 폴더를 트리로 지연 로딩하며 선택하는 다이얼로그."""
-
-    def __init__(self, master, drive: DriveClient):
-        self.drive = drive
-        self.result: tuple[str, str] | None = None
-
-        self.win = tk.Toplevel(master)
-        self.win.title("드라이브 폴더 선택")
-        self.win.geometry("440x480")
-        self.win.transient(master)
-        self.win.grab_set()
-
-        ttk.Label(self.win, text="동기화할 폴더를 선택하세요. ▶ 를 눌러 펼칩니다.").pack(
-            anchor="w", padx=8, pady=(8, 4))
-
-        wrap = ttk.Frame(self.win)
-        wrap.pack(fill="both", expand=True, padx=8)
-        self.tree = ttk.Treeview(wrap, show="tree", selectmode="browse")
-        ysb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=ysb.set)
-        ysb.pack(side="right", fill="y")
-        self.tree.pack(side="left", fill="both", expand=True)
-
-        # id -> (folder_id, name, loaded)
-        self._nodes: dict[str, list] = {}
-        root_node = self.tree.insert("", "end", text="내 드라이브", open=False)
-        self._nodes[root_node] = ["root", "내 드라이브", False]
-        self.tree.insert(root_node, "end", text="(로딩…)")  # 더미
-
-        self.tree.bind("<<TreeviewOpen>>", self._on_open)
-
-        bar = ttk.Frame(self.win)
-        bar.pack(fill="x", padx=8, pady=8)
-        ttk.Button(bar, text="이 폴더 선택", command=self._select).pack(side="right")
-        ttk.Button(bar, text="취소", command=self.win.destroy).pack(side="right", padx=6)
-
-    def _on_open(self, _event):
-        node = self.tree.focus()
-        info = self._nodes.get(node)
-        if not info or info[2]:  # 이미 로드됨
-            return
-        folder_id = info[0]
-        # 더미 제거
-        for child in self.tree.get_children(node):
-            self.tree.delete(child)
-        try:
-            folders = self.drive.list_folders(folder_id)
-        except Exception as e:
-            messagebox.showerror("오류", f"폴더 목록 로드 실패:\n{e}")
-            return
-        for fo in folders:
-            child = self.tree.insert(node, "end", text=fo["name"])
-            self._nodes[child] = [fo["id"], fo["name"], False]
-            self.tree.insert(child, "end", text="(로딩…)")  # 더미(펼침 표시용)
-        info[2] = True
-
-    def _select(self):
-        node = self.tree.focus()
-        info = self._nodes.get(node)
-        if not info:
-            messagebox.showinfo("알림", "폴더를 선택하세요.")
-            return
-        self.result = (info[0], info[1])
-        self.win.destroy()
-
-    def pick(self) -> tuple[str, str] | None:
-        self.win.wait_window()
-        return self.result
 
 
 def _split_csv(s: str) -> list[str]:

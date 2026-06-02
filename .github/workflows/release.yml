@@ -25,6 +25,24 @@ jobs:
       - name: 의존성 설치
         run: python -m pip install -r requirements-dev.txt
 
+      - name: OAuth 클라이언트 주입
+        shell: pwsh
+        env:
+          # Secrets / Variables 어느 쪽에 등록해도 동작하도록 폴백.
+          CID: ${{ secrets.SAVESYNC_OAUTH_CLIENT_ID || vars.SAVESYNC_OAUTH_CLIENT_ID }}
+          CSECRET: ${{ secrets.SAVESYNC_OAUTH_CLIENT_SECRET || vars.SAVESYNC_OAUTH_CLIENT_SECRET }}
+        run: |
+          if (-not $env:CID -or -not $env:CSECRET) {
+            Write-Error "SAVESYNC_OAUTH_CLIENT_ID / SAVESYNC_OAUTH_CLIENT_SECRET 시크릿이 설정되지 않았습니다. (저장소 Settings → Secrets and variables → Actions)"
+            exit 1
+          }
+          $p = "savesync/oauth_client.py"
+          $src = Get-Content $p -Raw
+          $src = $src -replace 'CLIENT_ID = ""',     ('CLIENT_ID = "' + $env:CID + '"')
+          $src = $src -replace 'CLIENT_SECRET = ""', ('CLIENT_SECRET = "' + $env:CSECRET + '"')
+          Set-Content $p $src -Encoding utf8 -NoNewline
+          Write-Host "OAuth 클라이언트 주입 완료 (client_id 끝자리: $($env:CID.Substring([Math]::Max(0,$env:CID.Length-12))))"
+
       - name: exe 빌드
         run: .\build_exe.ps1
         shell: pwsh

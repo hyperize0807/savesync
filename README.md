@@ -16,89 +16,51 @@ PC 고전게임의 세이브파일을 **Google Drive**와 자동 동기화하는
 - **덮어쓰기 전 자동 백업**: 사라질 버전을 타임스탬프 폴더에 보관
 - 삭제는 전파하지 않음 (세이브 데이터 보호 — 한쪽에서 지워도 복원됨)
 
-## 설치
+---
 
-```powershell
-cd savesync
-python -m pip install -r requirements.txt
-```
+## 빠른 시작 (최종 사용자)
 
-요구사항: Python 3.10+ (3.13에서 테스트)
+Python 설치가 필요 없습니다. 릴리스 exe 하나면 됩니다.
 
-## Google Drive 연결 (최초 1회)
+1. [Releases](../../releases) 에서 최신 **`SaveSync.exe`** 를 내려받습니다.
+2. 더블클릭해 실행합니다.
 
-API를 직접 사용하므로 본인의 OAuth 클라이언트가 필요합니다.
+   > **SmartScreen 경고가 뜰 때** — 처음 실행하면 *"Windows의 PC를 보호했습니다"*
+   > 파란 창이 나올 수 있습니다. 악성코드가 아니라 **게시자 서명이 없어서** 뜨는
+   > 경고이니, **`추가 정보` → `실행`** 을 누르면 됩니다. (백신이 막으면 예외/허용
+   > 처리하세요. PyInstaller 로 묶은 exe 특성상 드물게 오탐이 있습니다.)
 
-1. [Google Cloud Console](https://console.cloud.google.com/) 에서 프로젝트 생성
-2. **API 및 서비스 → 라이브러리** 에서 **Google Drive API** 사용 설정
-3. **API 및 서비스 → OAuth 동의 화면** 구성 (외부, 테스트 사용자에 본인 계정 추가)
-4. **사용자 인증 정보 → 사용자 인증 정보 만들기 → OAuth 클라이언트 ID → 데스크톱 앱**
-5. 만들어진 클라이언트의 JSON을 내려받아 아래 위치에 **`credentials.json`** 이름으로 저장:
+3. 콘솔 창 없이 **작업표시줄 트레이**에 SaveSync 아이콘이 상주합니다.
+4. 트레이 아이콘을 더블클릭해 설정 창을 열고 **① Google Drive 연결 → ② 프로필 등록**
+   순서로 진행합니다(아래 두 절 참고).
 
-   ```
-   %APPDATA%\SaveSync\credentials.json
-   ```
+> **부팅 시 자동 시작**: `SaveSync.exe` 의 바로가기를 만들어 `shell:startup`
+> (Win+R 에 입력) 폴더에 넣으면 부팅 시 자동으로 트레이에 상주합니다.
 
-6. 앱 실행 후 **트레이 아이콘 → 설정 → 계정 탭 → "Google Drive에 연결"** 클릭
-   → 브라우저 인증을 마치면 `token.json` 이 저장되고 이후 자동 로그인됩니다.
+## ① Google Drive 연결 (최초 1회)
 
-## 실행
+설정 창 **계정** 탭 → **"Google Drive에 연결"** 을 누르면 브라우저가 열립니다.
+Google 로그인·동의를 마치면 이후 자동 로그인됩니다. (따로 준비할 파일은 없습니다.)
 
-```powershell
-# 트레이 상주 모드 (기본)
-python -m savesync
+- 동기화 파일은 내 드라이브의 **`SaveSync`** 폴더 아래에 프로필별 폴더로 저장됩니다.
+- 앱은 `drive.file` 권한만 사용해 **자기가 만든 이 폴더 외의 파일에는 접근하지
+  않습니다** (다른 파일·개인정보 안전).
 
-# 콘솔 없이 실행 (탐색기에서 더블클릭 가능)
-run_savesync.pyw
+> 동의 화면에 **"Google에서 확인하지 않은 앱"** 경고가 보이면 `고급 → 계속` 을
+> 누르세요. (검수 전 앱이라 그렇습니다. 배포자가 등록한 테스트 계정으로 로그인해야
+> 진행됩니다 — 안 된다면 배포자에게 계정 등록을 요청하세요.)
 
-# 1회만 동기화하고 종료 (인증 완료 후)
-python -m savesync --sync-once
+## ② 프로필 등록 / 사용 흐름
 
-# 설정 창만 열기
-python -m savesync --settings
-```
-
-### 부팅 시 자동 시작
-`run_savesync.pyw` 의 바로가기를 만들어
-`shell:startup` (Win+R → 입력) 폴더에 넣으면 부팅 시 자동 상주합니다.
-
-### 단일 실행파일(.exe) 내려받기
-Python 설치 없이 쓰려면 [Releases](../../releases) 에서 최신 `SaveSync.exe` 를
-내려받으면 됩니다. 버전 태그(`vX.Y.Z`)를 push 할 때마다 GitHub Actions 가
-Windows 러너에서 빌드해 해당 릴리스에 자동 첨부합니다.
-
-```powershell
-# 새 버전 배포 (메인테이너)
-git tag v1.0.0
-git push origin v1.0.0
-# → .github/workflows/release.yml 가 exe 를 빌드해 Release 에 첨부
-```
-
-### 직접 빌드
-로컬에서 직접 묶으려면 PyInstaller 를 씁니다.
-
-```powershell
-python -m pip install -r requirements-dev.txt
-.\build_exe.ps1
-# 결과물: dist\SaveSync.exe  (콘솔 없이 트레이 상주)
-```
-
-빌드된 exe 도 최초 1회 Google 인증·`credentials.json` 이 필요하며,
-설정/토큰/백업은 `%APPDATA%\SaveSync` 에 저장되어 exe 와 무관하게 유지됩니다.
-
-## 사용 흐름
-
-1. 트레이 아이콘 더블클릭 → 설정 창
-2. **계정** 탭에서 Google Drive 연결
-3. **프로필** 탭에서 **추가** → 이름 입력
+1. **프로필** 탭 → **추가** → 이름 입력
    - **로컬 세이브 폴더**: `찾기…` 로 선택
-   - **드라이브 폴더**: `탐색…` 으로 Drive 폴더를 트리에서 직접 선택하거나,
-     URL/ID 를 붙여넣고 `확인`
+   - **드라이브 폴더 이름**: 내 드라이브 `SaveSync/` 아래에 만들 폴더 이름
+     (비우면 프로필 이름 사용)
    - **규칙**: 확장자/패턴 입력 (모두 비우면 폴더 내 모든 파일)
    - `현재 입력을 프로필에 적용`
-4. **일반** 탭에서 충돌 정책 / 주기(분) / 백업 설정
-5. **저장** → 이후 주기마다 자동 동기화. `지금 동기화` 로 즉시 실행 가능.
-6. **로그** 탭에서 최근 실행 로그와 마지막 동기화 결과를 확인할 수 있습니다.
+2. **일반** 탭에서 충돌 정책 / 주기(분) / 백업 설정
+3. **저장** → 이후 주기마다 자동 동기화. `지금 동기화` 로 즉시 실행 가능.
+4. **로그** 탭에서 최근 실행 로그와 마지막 동기화 결과를 확인할 수 있습니다.
    (`자동(2초)` 으로 실시간 갱신, 오류 발생 시 트레이 알림으로도 통지)
 
 ## 데이터 위치 (`%APPDATA%\SaveSync\`)
@@ -106,10 +68,13 @@ python -m pip install -r requirements-dev.txt
 | 파일/폴더 | 내용 |
 |---|---|
 | `config.json` | 모든 설정 |
-| `credentials.json` | (사용자 제공) OAuth 클라이언트 |
 | `token.json` | 인증 토큰 (자동 생성) |
+| `oauth_client.json` | (선택·개발자용) OAuth 클라이언트 주입 파일 |
 | `backups\<프로필>\<타임스탬프>\` | 덮어쓰기 전 백업 |
 | `savesync.log` | 실행 로그 |
+
+> 설정/토큰/백업은 모두 여기에 저장되므로, exe 를 새 버전으로 교체해도 그대로
+> 유지됩니다.
 
 ## 동기화 동작 상세
 
@@ -126,6 +91,63 @@ python -m pip install -r requirements-dev.txt
 - `매번 물어보기` 정책은 수동(`지금 동기화`)에서만 대화상자로 묻습니다.
   자동(백그라운드) 실행 시에는 안전하게 `수정날짜 최신 우선`으로 처리합니다.
 
+---
+
+# 개발자 / 메인테이너
+
+## 소스에서 실행 (Python)
+
+요구사항: Python 3.10+ (3.13에서 테스트). **exe 사용자는 이 절을 건너뛰세요.**
+
+```powershell
+python -m pip install -r requirements.txt
+
+python -m savesync            # 트레이 상주 모드 (기본)
+run_savesync.pyw              # 콘솔 없이 실행 (탐색기에서 더블클릭)
+python -m savesync --sync-once  # 1회만 동기화하고 종료 (인증 완료 후)
+python -m savesync --settings   # 설정 창만 열기
+```
+
+## 공유 OAuth 클라이언트 만들기 (배포 전 1회)
+
+릴리스 exe 가 사용자에게 "클릭만으로 연결"되려면 **배포자의 OAuth 클라이언트가
+exe 에 내장**되어 있어야 합니다.
+
+1. [Google Cloud Console](https://console.cloud.google.com/) 프로젝트 생성
+2. **API 및 서비스 → 라이브러리 → Google Drive API** 사용 설정
+3. **OAuth 동의 화면** 구성(외부). 검수 없이 쓰려면 **테스트 사용자**에 사용할
+   계정들을 추가(최대 100명). *주의: 테스트 모드에서는 refresh 토큰이 7일마다
+   만료되어 재로그인이 필요합니다.*
+4. **사용자 인증 정보 → OAuth 클라이언트 ID → 데스크톱 앱** 생성
+5. 발급된 `client_id` / `client_secret` 을 주입(상황별 택1):
+   - **릴리스 빌드 (권장)**: GitHub 저장소 **Settings → Secrets and variables →
+     Actions** 에 `SAVESYNC_OAUTH_CLIENT_ID`, `SAVESYNC_OAUTH_CLIENT_SECRET` 등록.
+     CI 가 빌드 직전 `oauth_client.py` 에 값을 주입하므로 소스/공개 저장소에는
+     비밀이 남지 않습니다.
+   - **로컬 테스트**: 같은 이름의 환경변수, 또는
+     `%APPDATA%\SaveSync\oauth_client.json`
+     (`{"installed": {"client_id": "...", "client_secret": "..."}}`)
+   - 또는 `savesync/oauth_client.py` 상수에 직접 입력(공개 저장소엔 비권장)
+
+## 릴리스 빌드
+
+버전 태그(`vX.Y.Z`)를 push 하면 GitHub Actions 가 Windows 러너에서 exe 를 빌드하고,
+위 Secrets 로 OAuth 클라이언트를 주입한 뒤 Release 에 `SaveSync.exe` 를 첨부합니다.
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+# → .github/workflows/release.yml 가 exe 를 빌드해 Release 에 첨부
+```
+
+로컬에서 직접 묶으려면(위 환경변수/`oauth_client.json` 으로 클라이언트를 주입한 상태):
+
+```powershell
+python -m pip install -r requirements-dev.txt
+.\build_exe.ps1
+# 결과물: dist\SaveSync.exe  (콘솔 없이 트레이 상주)
+```
+
 ## 테스트
 
 ```powershell
@@ -140,8 +162,9 @@ Google 라이브러리 없이도 매칭/충돌/백업 로직을 검증합니다 
 savesync/
   paths.py        # %APPDATA% 경로
   config.py       # 설정(프로필/규칙) 로드·저장
+  oauth_client.py # 내장 공유 OAuth 클라이언트 (사용자 credentials.json 불필요)
   matcher.py      # 동기화 대상 파일 규칙
-  drive.py        # Google Drive API 래퍼
+  drive.py        # Google Drive API 래퍼 (drive.file 스코프)
   backup.py       # 덮어쓰기 전 백업
   syncengine.py   # 동기화 결정/실행 (핵심 로직)
   scheduler.py    # 주기 타이머

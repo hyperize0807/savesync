@@ -14,6 +14,7 @@ dist/
 
 # --- 민감 정보 / 런타임 데이터 (실제로는 %APPDATA%\SaveSync 에 저장되지만 안전장치) ---
 credentials.json
+oauth_client.json
 token.json
 config.json
 *.log

@@ -1,8 +1,12 @@
 """Google Drive API 래퍼.
 
-인증: Google Cloud Console에서 발급한 "데스크톱 앱" OAuth 클라이언트
-      (credentials.json)를 %APPDATA%\\SaveSync 에 두면, 최초 1회 브라우저
-      인증 후 token.json 에 토큰을 저장한다.
+인증: 앱에 내장된 공유 OAuth 클라이언트(oauth_client.py)로 최초 1회 브라우저
+      인증을 진행하고 token.json 에 토큰을 저장한다. 사용자가 직접
+      credentials.json 을 만들 필요가 없다.
+
+스코프: drive.file — "앱이 만들었거나 사용자가 앱으로 연 파일"만 접근한다.
+      따라서 임의의 기존 폴더를 탐색/선택할 수는 없고, 대신 앱이 내 드라이브
+      최상위에 'SaveSync' 폴더를 만들고 그 아래 프로필별 폴더에 동기화한다.
 
 핵심 설계
 ---------
@@ -24,11 +28,13 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload, MediaIoBaseDownload
 
-from . import paths
+from . import oauth_client, paths
 
-# 임의의 사용자 폴더를 읽고/쓰려면 전체 drive 스코프가 필요하다.
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+# drive.file: 앱이 만든/연 파일만 접근 (사용자 동의·검수 부담이 작다).
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 FOLDER_MIME = "application/vnd.google-apps.folder"
+# 내 드라이브 최상위에 만드는 앱 전용 루트 폴더 이름.
+APP_ROOT_FOLDER = "SaveSync"
 
 
 def rfc3339_to_epoch(s: str) -> float:
@@ -59,7 +65,8 @@ class DriveClient:
     # ---------- 인증 ----------
     @staticmethod
     def has_credentials() -> bool:
-        return paths.credentials_path().exists()
+        """앱에 OAuth 클라이언트가 설정되어 사용자가 연결할 수 있는 상태인지."""
+        return oauth_client.is_configured()
 
     @staticmethod
     def is_authorized() -> bool:
@@ -76,14 +83,14 @@ class DriveClient:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             elif run_auth_flow:
-                if not self.has_credentials():
+                if not oauth_client.is_configured():
                     raise DriveError(
-                        "credentials.json 이 없습니다. Google Cloud Console에서 "
-                        "데스크톱 OAuth 클라이언트를 만들어 "
-                        f"{paths.credentials_path()} 에 저장하세요."
+                        "앱에 Google OAuth 클라이언트가 설정되어 있지 않습니다. "
+                        "(개발자) oauth_client.py 를 채우거나 환경변수/"
+                        f"{paths.app_dir() / 'oauth_client.json'} 로 주입하세요."
                     )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    str(paths.credentials_path()), SCOPES
+                flow = InstalledAppFlow.from_client_config(
+                    oauth_client.client_config(), SCOPES
                 )
                 creds = flow.run_local_server(port=0)
             else:
@@ -98,32 +105,30 @@ class DriveClient:
             raise DriveError("연결되지 않았습니다. connect() 를 먼저 호출하세요.")
 
     # ---------- 폴더 ----------
-    def resolve_folder(self, url_or_id: str) -> tuple[str, str]:
-        """드라이브 폴더 URL 또는 ID 를 받아 (folder_id, name) 반환."""
-        self._ensure()
-        fid = url_or_id.strip()
-        # URL 에서 ID 추출
-        if "/folders/" in fid:
-            fid = fid.split("/folders/", 1)[1].split("?", 1)[0].split("/", 1)[0]
-        elif "id=" in fid:
-            fid = fid.split("id=", 1)[1].split("&", 1)[0]
-        meta = self.service.files().get(
-            fileId=fid, fields="id,name,mimeType", supportsAllDrives=True
+    def _create_folder(self, name: str, parent_id: str) -> str:
+        meta = {"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
+        created = self.service.files().create(
+            body=meta, fields="id", supportsAllDrives=True
         ).execute()
-        if meta.get("mimeType") != FOLDER_MIME:
-            raise DriveError("지정한 항목이 폴더가 아닙니다.")
-        return meta["id"], meta["name"]
+        self._folder_cache[(parent_id, name)] = created["id"]
+        return created["id"]
 
-    def list_folders(self, parent_id: str = "root") -> list[dict[str, str]]:
-        """parent 아래의 하위 폴더 목록(폴더 선택 UI용)."""
+    def _ensure_app_root(self) -> str:
+        """내 드라이브 최상위에 'SaveSync' 폴더를 찾거나 만든다."""
+        return (self._find_child_folder("root", APP_ROOT_FOLDER)
+                or self._create_folder(APP_ROOT_FOLDER, "root"))
+
+    def ensure_profile_folder(self, profile_folder_name: str) -> str:
+        """'SaveSync/<이름>' 하위 폴더를 찾거나 만들어 그 ID 를 반환한다.
+
+        drive.file 스코프에서는 임의의 기존 폴더에 접근할 수 없으므로,
+        앱이 만든 이 폴더 트리에만 동기화한다(다른 기기의 같은 앱은 동일
+        클라이언트라 이 폴더를 다시 찾을 수 있어 기기 간 동기화가 된다).
+        """
         self._ensure()
-        q = (f"'{parent_id}' in parents and mimeType='{FOLDER_MIME}' "
-             f"and trashed=false")
-        res = self.service.files().list(
-            q=q, fields="files(id,name)", orderBy="name",
-            pageSize=1000, supportsAllDrives=True, includeItemsFromAllDrives=True,
-        ).execute()
-        return res.get("files", [])
+        app_root = self._ensure_app_root()
+        name = (profile_folder_name or "").strip() or "기본"
+        return self._find_child_folder(app_root, name) or self._create_folder(name, app_root)
 
     def _find_child_folder(self, parent_id: str, name: str) -> str | None:
         key = (parent_id, name)
@@ -152,12 +157,7 @@ class DriveClient:
                 continue
             child = self._find_child_folder(parent, part)
             if child is None:
-                meta = {"name": part, "mimeType": FOLDER_MIME, "parents": [parent]}
-                created = self.service.files().create(
-                    body=meta, fields="id", supportsAllDrives=True
-                ).execute()
-                child = created["id"]
-                self._folder_cache[(parent, part)] = child
+                child = self._create_folder(part, parent)
             parent = child
         return parent
 
