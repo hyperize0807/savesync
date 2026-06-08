@@ -57,8 +57,26 @@ jobs:
         run: .\build_exe.ps1
         shell: pwsh
 
+      - name: 릴리스 노트 준비
+        id: notes
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $path = "release-notes/$tag.md"
+          if (Test-Path $path) {
+            Write-Host "릴리스 노트 사용: $path"
+          } else {
+            # 노트 파일이 없으면 빈 본문 파일을 만들어 둔다(아래 자동 변경로그만 표시됨).
+            New-Item -ItemType Directory -Force -Path release-notes | Out-Null
+            Set-Content -Path $path -Value "" -Encoding utf8 -NoNewline
+            Write-Warning "release-notes/$tag.md 가 없어 본문 없이 진행합니다(자동 변경로그만 포함)."
+          }
+          "path=$path" >> $env:GITHUB_OUTPUT
+
       - name: 릴리스에 exe 첨부
         uses: softprops/action-gh-release@v2
         with:
           files: dist/SaveSync.exe
+          # release-notes/<tag>.md 본문을 사용하고, 그 아래에 자동 변경로그를 덧붙인다.
+          body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true
