@@ -96,30 +96,42 @@ def render_update_script() -> str:
 
     인자: %~1=PID, %~2="기존 exe", %~3="새 exe".
     값을 본문에 인터폴레이션하지 않고 argv 로만 받으므로 공백/특수문자에 안전하다.
+
+    주의점(과거 버그)
+    -----------------
+    - 대기에는 `timeout` 을 쓰지 않는다. 헬퍼는 stdin 이 리다이렉트된(DEVNULL)
+      detached 프로세스로 실행되는데, 그 경우 `timeout` 은 "Input redirection is
+      not supported" 로 즉시 종료되어 대기가 전혀 일어나지 않는다.
+      대신 `ping -n N 127.0.0.1` 으로 대기한다(콘솔 입력이 필요 없음).
+    - `--onefile` exe 는 부트로더(부모)와 실제 앱(자식) 두 프로세스가 모두
+      SaveSync.exe 를 잠근다. PID 한 개만 기다리면 파일이 아직 잠겨 있을 수 있으므로,
+      실제 성공 판정은 `move` 재시도 루프가 한다(잠금이 풀려야만 move 가 성공).
     """
     return (
         "@echo off\r\n"
-        "setlocal enableextensions\r\n"
+        "setlocal enableextensions disabledelayedexpansion\r\n"
         'set "PID=%~1"\r\n'
         'set "OLD=%~2"\r\n'
         'set "NEW=%~3"\r\n'
+        "rem 1) best-effort wait for the caller PID to exit (ping = ~1s sleep)\r\n"
         "set /a tries=0\r\n"
         ":waitloop\r\n"
         'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul\r\n'
-        "if errorlevel 1 goto exited\r\n"
+        "if errorlevel 1 goto replace\r\n"
         "set /a tries+=1\r\n"
-        "if %tries% GEQ 60 goto exited\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
+        "if %tries% GEQ 30 goto replace\r\n"
+        "ping -n 2 127.0.0.1 >nul\r\n"
         "goto waitloop\r\n"
-        ":exited\r\n"
-        "set /a rtries=0\r\n"
+        "rem 2) retry move until the exe lock is released (onefile bootloader may linger)\r\n"
         ":replace\r\n"
+        "set /a rtries=0\r\n"
+        ":reploop\r\n"
         'move /y "%NEW%" "%OLD%" >nul 2>&1\r\n'
         "if not errorlevel 1 goto launch\r\n"
         "set /a rtries+=1\r\n"
-        "if %rtries% GEQ 20 goto failed\r\n"
-        "timeout /t 1 /nobreak >nul\r\n"
-        "goto replace\r\n"
+        "if %rtries% GEQ 60 goto failed\r\n"
+        "ping -n 2 127.0.0.1 >nul\r\n"
+        "goto reploop\r\n"
         ":launch\r\n"
         'start "" "%OLD%"\r\n'
         "goto cleanup\r\n"
@@ -224,10 +236,18 @@ def spawn_updater(new_exe: Path, exe: Path | None = None) -> None:
         raise UpdateNotWritableError(str(target.parent))
 
     script = _update_dir() / "savesync_update.cmd"
-    script.write_text(render_update_script(), encoding="ascii")
+    # newline="" 로 기록한다. Path.write_text/텍스트 모드는 문자열의 '\n' 을 다시
+    # '\r\n' 으로 변환하므로, 본문의 '\r\n' 이 '\r\r\n'(이중 CR)이 되어 배치의
+    # 라벨/goto/변수값을 오염시킨다. 본문이 이미 CRLF 를 포함하므로 변환을 끈다.
+    with open(script, "w", encoding="ascii", newline="") as f:
+        f.write(render_update_script())
 
+    # CREATE_NO_WINDOW: 보이는 콘솔 창 없이, 그러나 콘솔 하위 명령(tasklist/ping 등)이
+    #   정상 동작하는 (숨은) 콘솔을 부여한다. DETACHED_PROCESS 는 콘솔이 아예 없어
+    #   콘솔 프로그램이 별도 터미널 창을 띄우는 문제가 있었다.
+    # CREATE_NEW_PROCESS_GROUP: 부모(SaveSync.exe) 종료 후에도 헬퍼가 살아남도록 분리.
     creationflags = (subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
-                     | getattr(subprocess, "DETACHED_PROCESS", 0))
+                     | getattr(subprocess, "CREATE_NO_WINDOW", 0))
     subprocess.Popen(
         ["cmd", "/c", str(script), str(os.getpid()), str(target), str(new_exe)],
         creationflags=creationflags, close_fds=True, cwd=str(script.parent),

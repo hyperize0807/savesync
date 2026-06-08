@@ -289,6 +289,17 @@ def test_render_update_script():
     check('start "" "%OLD%"' in s, "재실행 포함")
     check('del "%~f0"' in s, "자기 삭제 idiom 포함")
     check("%~1" in s and "%~2" in s and "%~3" in s, "argv(%~1..3) 참조")
+    # 회귀 방지: timeout 은 stdin 리다이렉트 시 동작하지 않으므로 절대 쓰지 않는다.
+    check("timeout " not in s, "timeout 미사용(회귀 방지)")
+    check("ping -n" in s, "ping 기반 대기 사용")
+    # move 재시도가 실제 성공 판정의 근거 — 넉넉한 재시도 예산
+    check(s.count("ping -n") >= 2, "대기/재시도 양쪽에 ping 적용")
+    # 회귀 방지: spawn_updater 가 .cmd 를 ascii 로 기록하므로 본문은 ascii 여야 함
+    try:
+        s.encode("ascii")
+        check(True, "스크립트 본문이 ASCII 인코딩 가능(주석에 한글 금지)")
+    except UnicodeEncodeError:
+        check(False, "스크립트 본문이 ASCII 인코딩 가능(주석에 한글 금지)")
 
 
 def main():

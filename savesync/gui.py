@@ -580,6 +580,10 @@ class SettingsWindow:
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_update(self, new_exe, rel: dict):
+        # 먼저 모달로 사용자에게 알린다. (헬퍼를 먼저 띄우면, 이 모달이 떠 있는 동안
+        #  헬퍼가 아직 살아있는 앱을 기다리며 헛돌 수 있으므로 spawn 은 종료 직전에 한다.)
+        messagebox.showinfo(
+            "업데이트", "업데이트를 적용합니다. 앱이 종료된 뒤 자동으로 다시 시작됩니다.")
         try:
             updater.spawn_updater(new_exe)
         except updater.UpdateNotWritableError:
@@ -594,9 +598,7 @@ class SettingsWindow:
         except Exception as e:
             self._update_failed("업데이트 적용 실패", e)
             return
-        # 업데이터 .cmd 가 종료를 기다리므로 앱을 깔끔히 종료한다.
-        messagebox.showinfo(
-            "업데이트", "업데이트를 적용합니다. 앱이 종료된 뒤 자동으로 다시 시작됩니다.")
+        # 헬퍼 .cmd 가 종료를 기다렸다가 교체+재시작하므로 앱을 깔끔히 종료한다.
         if self.on_quit:
             self.on_quit()
 
