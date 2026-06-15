@@ -2,7 +2,12 @@
 
 규칙 우선순위:
 1) exclude_globs 에 걸리면 제외
-2) include_extensions / include_globs 중 하나라도 매치하면 포함
+2) 지정된 포함 조건(확장자·패턴)을 "모두" 만족해야 포함(AND).
+   - 확장자 목록 안에서는 하나라도 맞으면 됨(OR), 패턴 목록 안에서도 OR.
+   - 단, 확장자와 패턴을 둘 다 입력했다면 양쪽 모두 만족해야 함.
+     예) 확장자 '.sav' + 패턴 'G3P_II*' → 'G3P_II_01.sav' 포함,
+         'G30001.sav'(확장자만 일치)는 제외.
+   - 한쪽만 입력했다면 그 조건만 적용.
 3) include_extensions 와 include_globs 가 모두 비어 있으면 "모든 파일 포함"
 """
 from __future__ import annotations
@@ -25,22 +30,25 @@ def matches(rel_path: str, rules: Rules) -> bool:
         if fnmatch.fnmatch(name_lower, pat.lower()):
             return False
 
-    has_include = bool(rules.include_extensions) or bool(rules.include_globs)
-    if not has_include:
+    has_ext = bool(rules.include_extensions)
+    has_glob = bool(rules.include_globs)
+    if not has_ext and not has_glob:
         # 포함 규칙이 없으면 (제외되지 않은) 모든 파일 포함
         return True
 
-    # 2) 확장자
-    ext = os.path.splitext(name_lower)[1]
-    if ext in rules.include_extensions:
-        return True
+    # 2) 확장자 조건(입력된 경우 반드시 만족)
+    if has_ext:
+        ext = os.path.splitext(name_lower)[1]
+        if ext not in rules.include_extensions:
+            return False
 
-    # 3) glob 패턴
-    for pat in rules.include_globs:
-        if fnmatch.fnmatch(name_lower, pat.lower()):
-            return True
+    # 3) glob 패턴 조건(입력된 경우 반드시 만족)
+    if has_glob:
+        if not any(fnmatch.fnmatch(name_lower, pat.lower())
+                   for pat in rules.include_globs):
+            return False
 
-    return False
+    return True
 
 
 def iter_local_files(local_folder: str, rules: Rules) -> Iterator[str]:

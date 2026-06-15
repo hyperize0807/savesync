@@ -100,6 +100,30 @@ def test_matcher():
     check(matcher.matches("anything.bin", r3), "규칙없음=모두포함")
 
 
+def test_matcher_ext_and_glob():
+    print("test_matcher_ext_and_glob (확장자+패턴은 AND)")
+    # 확장자 '.sav' + 패턴 'G3P_II*' → 둘 다 만족해야 포함
+    r = Rules(include_extensions=[".sav"], include_globs=["G3P_II*"])
+    check(matcher.matches("G3P_II_01.sav", r), "확장자✓+패턴✓ → 포함")
+    check(not matcher.matches("G30001.sav", r), "확장자✓+패턴✗ → 제외(버그 회귀)")
+    check(not matcher.matches("G3P_II_save.dat", r), "확장자✗+패턴✓ → 제외")
+    check(not matcher.matches("note.txt", r), "둘 다 불일치 → 제외")
+    # 한쪽만 지정하면 그 조건만 적용
+    r_ext = Rules(include_extensions=[".sav"])
+    check(matcher.matches("G30001.sav", r_ext), "확장자만 지정 → .sav 포함")
+    r_glob = Rules(include_globs=["G3P_II*"])
+    check(matcher.matches("G3P_II_x.dat", r_glob), "패턴만 지정 → 패턴 일치 포함")
+    check(not matcher.matches("G30001.sav", r_glob), "패턴만 지정 → 패턴 불일치 제외")
+    # 여러 확장자 중 하나 + 패턴
+    r_multi = Rules(include_extensions=[".sav", ".dat"], include_globs=["G3P_II*"])
+    check(matcher.matches("G3P_II_a.dat", r_multi), "확장자 OR(.dat)✓+패턴✓ → 포함")
+    check(not matcher.matches("G3P_II_a.bin", r_multi), "확장자 목록 불일치 → 제외")
+    # 제외 패턴은 여전히 최우선
+    r_excl = Rules(include_extensions=[".sav"], include_globs=["G3P_II*"],
+                   exclude_globs=["*backup*"])
+    check(not matcher.matches("G3P_II_backup.sav", r_excl), "제외 패턴 최우선")
+
+
 def test_new_files_both_ways():
     print("test_new_files_both_ways")
     with tempfile.TemporaryDirectory() as d:
@@ -303,7 +327,8 @@ def test_render_update_script():
 
 
 def main():
-    for t in [test_matcher, test_new_files_both_ways, test_conflict_newer_local_wins,
+    for t in [test_matcher, test_matcher_ext_and_glob,
+              test_new_files_both_ways, test_conflict_newer_local_wins,
               test_conflict_newer_drive_wins, test_policy_force_local, test_subfolders,
               test_export_omits_local_folder, test_merge_by_name_preserves_local,
               test_merge_adds_new_with_empty_local, test_export_import_round_trip,
