@@ -229,6 +229,20 @@ def _dir_writable(d: Path) -> bool:
         return False
 
 
+def child_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """재시작될 exe 에 물려줄 깨끗한 환경을 만든다.
+
+    PyInstaller onefile 부트로더는 추출 폴더를 `_MEIPASS2` 등 내부 환경변수로
+    자식에 전달한다(부모가 풀고 자식이 그 경로를 재사용). 이 변수가 헬퍼 cmd →
+    start → 새 exe 로 상속되면, 새 부트로더가 재추출을 건너뛰고 **이미 삭제된 옛
+    `_MEIxxxxxx` 폴더**에서 python3xx.dll 을 찾으려다 "Failed to load Python DLL"
+    로 실패한다. 따라서 `_MEI*`/`_PYI*` 로 시작하는 부트로더 내부 변수를 제거한다.
+    """
+    src = os.environ if base is None else base
+    return {k: v for k, v in src.items()
+            if not (k.startswith("_MEI") or k.startswith("_PYI"))}
+
+
 def spawn_updater(new_exe: Path, exe: Path | None = None) -> None:
     """헬퍼 .cmd 를 작성하고 detached 로 실행한다(교체+재시작은 .cmd 가 수행)."""
     target = Path(exe) if exe else exe_path()
@@ -248,8 +262,11 @@ def spawn_updater(new_exe: Path, exe: Path | None = None) -> None:
     # CREATE_NEW_PROCESS_GROUP: 부모(SaveSync.exe) 종료 후에도 헬퍼가 살아남도록 분리.
     creationflags = (subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
                      | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    # env 에서 PyInstaller 부트로더 변수를 제거해, 재시작된 새 exe 가 옛(삭제된)
+    # _MEI 폴더를 재사용하려다 실패하는 문제를 막는다.
     subprocess.Popen(
         ["cmd", "/c", str(script), str(os.getpid()), str(target), str(new_exe)],
         creationflags=creationflags, close_fds=True, cwd=str(script.parent),
+        env=child_env(),
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )

@@ -326,6 +326,23 @@ def test_render_update_script():
         check(False, "스크립트 본문이 ASCII 인코딩 가능(주석에 한글 금지)")
 
 
+def test_child_env_scrubs_pyinstaller_vars():
+    print("test_child_env_scrubs_pyinstaller_vars")
+    base = {
+        "PATH": "x", "NORMAL": "keep",
+        "_MEIPASS2": r"C:\Temp\_MEI264082",
+        "_MEI264082": "y",
+        "_PYI_ARCHIVE_FILE": "z",
+        "_PYI_APPLICATION_HOME_DIR": "w",
+    }
+    out = updater.child_env(base)
+    check("_MEIPASS2" not in out, "_MEIPASS2 제거")
+    check("_MEI264082" not in out, "_MEI* 제거")
+    check("_PYI_ARCHIVE_FILE" not in out, "_PYI* 제거")
+    check("_PYI_APPLICATION_HOME_DIR" not in out, "_PYI* 모두 제거")
+    check(out.get("PATH") == "x" and out.get("NORMAL") == "keep", "일반 변수 보존")
+
+
 def main():
     for t in [test_matcher, test_matcher_ext_and_glob,
               test_new_files_both_ways, test_conflict_newer_local_wins,
@@ -333,7 +350,7 @@ def main():
               test_export_omits_local_folder, test_merge_by_name_preserves_local,
               test_merge_adds_new_with_empty_local, test_export_import_round_trip,
               test_parse_version, test_is_newer, test_pick_asset,
-              test_render_update_script]:
+              test_render_update_script, test_child_env_scrubs_pyinstaller_vars]:
         t()
     print()
     if _failures:
