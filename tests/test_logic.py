@@ -343,6 +343,61 @@ def test_child_env_scrubs_pyinstaller_vars():
     check(out.get("PATH") == "x" and out.get("NORMAL") == "keep", "일반 변수 보존")
 
 
+def test_connect_falls_back_on_revoked_token():
+    print("test_connect_falls_back_on_revoked_token")
+    from unittest import mock
+    from google.auth.exceptions import RefreshError
+    from savesync import drive as drive_mod
+    from savesync.drive import DriveClient, DriveError
+
+    with tempfile.TemporaryDirectory() as d:
+        tokfile = Path(d) / "token.json"
+        tokfile.write_text('{"old":"revoked"}', encoding="utf-8")
+
+        # 폐기된 토큰: 만료 + refresh_token 있음 + refresh() 가 invalid_grant
+        stale = mock.Mock()
+        stale.valid = False
+        stale.expired = True
+        stale.refresh_token = "revoked"
+        stale.refresh.side_effect = RefreshError("invalid_grant")
+
+        good = mock.Mock()
+        good.to_json.return_value = '{"token":"new"}'
+        flow = mock.Mock()
+        flow.run_local_server.return_value = good
+
+        with mock.patch.object(drive_mod.paths, "token_path", return_value=tokfile), \
+             mock.patch.object(drive_mod.Credentials, "from_authorized_user_file",
+                               return_value=stale), \
+             mock.patch.object(drive_mod.oauth_client, "is_configured",
+                               return_value=True), \
+             mock.patch.object(drive_mod.oauth_client, "client_config",
+                               return_value={"installed": {}}), \
+             mock.patch.object(drive_mod.InstalledAppFlow, "from_client_config",
+                               return_value=flow), \
+             mock.patch.object(drive_mod, "build", return_value="SERVICE"):
+
+            # run_auth_flow=True: 폐기 토큰을 버리고 브라우저 인증으로 폴백해야 함
+            c = DriveClient()
+            c.connect(run_auth_flow=True)
+            check(stale.refresh.called, "폐기 토큰 refresh 시도함")
+            check(flow.run_local_server.called, "RefreshError 후 새 인증으로 폴백")
+            check(c.service == "SERVICE", "service 생성됨")
+            check(tokfile.read_text(encoding="utf-8") == '{"token":"new"}',
+                  "새 토큰으로 저장됨")
+
+            # run_auth_flow=False: 폴백 금지 → DriveError (브라우저 안 열림)
+            flow.run_local_server.reset_mock()
+            c2 = DriveClient()
+            raised = False
+            try:
+                c2.connect(run_auth_flow=False)
+            except DriveError:
+                raised = True
+            check(raised, "run_auth_flow=False 면 폐기 토큰 시 DriveError")
+            check(not flow.run_local_server.called, "백그라운드에선 브라우저 안 염")
+
+
 def main():
     for t in [test_matcher, test_matcher_ext_and_glob,
               test_new_files_both_ways, test_conflict_newer_local_wins,
@@ -350,7 +405,8 @@ def main():
               test_export_omits_local_folder, test_merge_by_name_preserves_local,
               test_merge_adds_new_with_empty_local, test_export_import_round_trip,
               test_parse_version, test_is_newer, test_pick_asset,
-              test_render_update_script, test_child_env_scrubs_pyinstaller_vars]:
+              test_render_update_script, test_child_env_scrubs_pyinstaller_vars,
+              test_connect_falls_back_on_revoked_token]:
         t()
     print()
     if _failures:

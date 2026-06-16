@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -133,21 +134,30 @@ class DriveClient:
             creds = Credentials.from_authorized_user_file(str(tok), SCOPES)
 
         if not creds or not creds.valid:
+            refreshed = False
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            elif run_auth_flow:
-                if not oauth_client.is_configured():
-                    raise DriveError(
-                        "앱에 Google OAuth 클라이언트가 설정되어 있지 않습니다. "
-                        "(개발자) oauth_client.py 를 채우거나 환경변수/"
-                        f"{paths.app_dir() / 'oauth_client.json'} 로 주입하세요."
+                try:
+                    creds.refresh(Request())
+                    refreshed = True
+                except RefreshError:
+                    # 리프레시 토큰이 폐기/만료됨(invalid_grant 등). 죽은 토큰을
+                    # 버리고, 허용되면 새 브라우저 인증으로 폴백한다. 이렇게 해야
+                    # '재인증' 버튼만으로 자가 복구된다(폐기된 토큰이 깔려 있어도).
+                    creds = None
+            if not refreshed:
+                if run_auth_flow:
+                    if not oauth_client.is_configured():
+                        raise DriveError(
+                            "앱에 Google OAuth 클라이언트가 설정되어 있지 않습니다. "
+                            "(개발자) oauth_client.py 를 채우거나 환경변수/"
+                            f"{paths.app_dir() / 'oauth_client.json'} 로 주입하세요."
+                        )
+                    flow = InstalledAppFlow.from_client_config(
+                        oauth_client.client_config(), SCOPES
                     )
-                flow = InstalledAppFlow.from_client_config(
-                    oauth_client.client_config(), SCOPES
-                )
-                creds = flow.run_local_server(port=0)
-            else:
-                raise DriveError("인증되지 않았습니다.")
+                    creds = flow.run_local_server(port=0)
+                else:
+                    raise DriveError("인증되지 않았습니다.")
             with open(tok, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
 
