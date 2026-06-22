@@ -146,10 +146,24 @@ class TrayApp:
         # 대기 계산 시 get_config() 를 통해 자동 반영된다(즉시 동기화는 하지 않음).
         self.cfg = cfg
 
-    def _sync_now(self):
+    def _sync_now(self) -> bool:
+        """수동 동기화를 시작한다. 실제 시작했으면 True, 막혔으면 False."""
         if self.scheduler.running_sync:
             messagebox.showinfo("동기화", "이미 동기화가 진행 중입니다.")
-            return
+            return False
+
+        # 로컬 세이브 폴더가 지정되지 않은 활성 프로필이 하나라도 있으면 중단.
+        # (지정 없이 동기화하면 의도치 않은 폴더가 동기화되는 사고를 막는다.)
+        missing = [p.name for p in self.cfg.profiles
+                   if p.enabled and not p.has_local_folder()]
+        if missing:
+            names = ", ".join(missing)
+            messagebox.showwarning(
+                "동기화 중단",
+                f"로컬 세이브 폴더가 지정되지 않은 프로필이 있습니다.\n"
+                f"'{names}' 프로필의 로컬 세이브 폴더를 지정해주세요.",
+            )
+            return False
 
         resolver = None
         if self.cfg.conflict_policy == CONFLICT_ASK:
@@ -160,6 +174,7 @@ class TrayApp:
             if not ok:
                 self.root.after(0, lambda: self.log.info("수동 동기화: 실행되지 않음(인증/프로필 확인)"))
         threading.Thread(target=work, daemon=True).start()
+        return True
 
     def _tk_conflict_resolver(self, rel: str, local_mtime: float, drive_mtime: float) -> str:
         """충돌 시 Tk 대화상자로 사용자에게 물어본다(다른 스레드에서 호출됨)."""

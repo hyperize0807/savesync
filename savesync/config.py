@@ -49,6 +49,14 @@ class Profile:
     rules: Rules = field(default_factory=Rules)
     enabled: bool = True
 
+    def has_local_folder(self) -> bool:
+        """로컬 세이브 폴더가 지정되어 있는지 여부.
+
+        프로필을 드라이브에서 가져오면 기기별 경로인 local_folder 는
+        비어 있으므로, 동기화 전에 이 검사로 미지정 프로필을 걸러낸다.
+        """
+        return bool(self.local_folder.strip())
+
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "Profile":
         return Profile(

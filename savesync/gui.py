@@ -414,8 +414,11 @@ class SettingsWindow:
     def _sync_now(self):
         self._save_quiet()
         if self.on_sync_now:
-            self.on_sync_now()
-            messagebox.showinfo("동기화", "동기화를 시작했습니다. (트레이 로그/알림 참고)")
+            # on_sync_now 가 실제로 동기화를 시작했을 때만 안내한다.
+            # (로컬 폴더 미지정 등으로 막히면 콜백 쪽에서 이미 경고를 띄운다.)
+            started = self.on_sync_now()
+            if started:
+                messagebox.showinfo("동기화", "동기화를 시작했습니다. (트레이 로그/알림 참고)")
 
     def _save_quiet(self):
         self._apply_and_refresh()

@@ -77,6 +77,12 @@ def sync_profile(
 ) -> SyncStats:
     stats = SyncStats(name=profile.name)
 
+    # 미지정 방어: 빈 경로는 Path('.') 로 해석되어 .is_dir() 이 True 가 되므로
+    # (실행 파일 위치가 동기화되는 사고) 명시적으로 막는다.
+    if not profile.has_local_folder():
+        stats.errors.append("로컬 세이브 폴더가 지정되지 않았습니다.")
+        return stats
+
     local_root = Path(profile.local_folder)
     if not local_root.is_dir():
         stats.errors.append(f"로컬 폴더 없음: {profile.local_folder}")
@@ -198,6 +204,12 @@ def sync_all(
     results = []
     for profile in cfg.profiles:
         if not profile.enabled:
+            continue
+        # 로컬 세이브 폴더가 지정되지 않은 프로필은 건너뛴다.
+        # (드라이브에서 가져온 직후 등) 미지정 상태로 동기화하면 의도치 않은
+        # 폴더(예: 실행 파일 위치)가 동기화 대상이 되는 사고를 막기 위함.
+        if not profile.has_local_folder():
+            log(f"[{profile.name}] 로컬 세이브 폴더가 지정되지 않아 건너뜁니다.")
             continue
         results.append(sync_profile(drive, cfg, profile, log, on_conflict))
     return results

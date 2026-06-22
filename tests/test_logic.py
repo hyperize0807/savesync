@@ -26,7 +26,7 @@ from savesync.config import CONFLICT_NEWER, CONFLICT_LOCAL, CONFLICT_DRIVE
 from savesync.config import (
     export_profiles_payload, merge_imported_profiles, PROFILES_BLOB_NAME,
 )
-from savesync.syncengine import sync_profile
+from savesync.syncengine import sync_profile, sync_all
 from savesync import updater
 
 _failures = []
@@ -199,6 +199,45 @@ def test_subfolders():
         sync_profile(drive, base_cfg(backup_dir=str(backup)),
                      make_profile(local, Rules(include_extensions=[".sav"], recursive=True)))
         check("slot1/a.sav" in drive.files, "하위 폴더 경로로 업로드됨")
+
+
+def test_unset_local_folder_guard():
+    print("test_unset_local_folder_guard (미지정 폴더 방어)")
+    check(not Profile(name="x", local_folder="").has_local_folder(),
+          "빈 문자열 = 미지정")
+    check(not Profile(name="x", local_folder="   ").has_local_folder(),
+          "공백만 = 미지정")
+    check(Profile(name="x", local_folder=r"C:\Saves").has_local_folder(),
+          "경로 있으면 지정됨")
+
+    drive = FakeDrive()
+    # sync_profile: 빈 폴더면 동기화하지 않고 오류로 기록(Path('') 사고 방지)
+    st = sync_profile(drive, base_cfg(),
+                      Profile(name="미지정", local_folder="", drive_folder_id="ROOT"))
+    check(st.errors and not st.has_activity(), "빈 폴더는 동기화 안 하고 오류 기록")
+    check(drive.files == {}, "드라이브에 아무것도 안 올라감(실행파일 폴더 사고 방지)")
+
+
+def test_sync_all_skips_unset_profiles():
+    print("test_sync_all_skips_unset_profiles (자동 동기화 건너뛰기)")
+    with tempfile.TemporaryDirectory() as d:
+        local = Path(d) / "local"; local.mkdir()
+        write(local / "a.sav", "AAA")
+        cfg = base_cfg()
+        cfg.profiles = [
+            Profile(name="지정됨", local_folder=str(local), drive_folder_id="ROOT",
+                    rules=Rules(include_extensions=[".sav"])),
+            Profile(name="미지정", local_folder="", drive_folder_id="ROOT",
+                    rules=Rules(include_extensions=[".sav"])),
+            Profile(name="비활성", local_folder="", enabled=False),
+        ]
+        logs: list[str] = []
+        results = sync_all(drive := FakeDrive(), cfg, log=logs.append)
+        names = [r.name for r in results]
+        check(names == ["지정됨"], "지정된 프로필만 동기화됨")
+        check(any("미지정" in m and "건너" in m for m in logs),
+              "미지정 프로필 건너뜀이 로그에 기록됨")
+        check(drive.files.get("a.sav", {}).get("bytes") == b"AAA", "지정 프로필은 정상 업로드")
 
 
 def test_export_omits_local_folder():
@@ -402,6 +441,7 @@ def main():
     for t in [test_matcher, test_matcher_ext_and_glob,
               test_new_files_both_ways, test_conflict_newer_local_wins,
               test_conflict_newer_drive_wins, test_policy_force_local, test_subfolders,
+              test_unset_local_folder_guard, test_sync_all_skips_unset_profiles,
               test_export_omits_local_folder, test_merge_by_name_preserves_local,
               test_merge_adds_new_with_empty_local, test_export_import_round_trip,
               test_parse_version, test_is_newer, test_pick_asset,
