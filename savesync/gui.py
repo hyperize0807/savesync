@@ -176,7 +176,16 @@ class SettingsWindow:
         self.profile_list.delete(0, "end")
         for p in self.cfg.profiles:
             mark = "" if p.enabled else " (꺼짐)"
+            # 활성 프로필인데 로컬 세이브 폴더가 비어 있으면 경고 표시.
+            # (이 상태로는 동기화에서 건너뛰어지므로 사용자가 미리 알 수 있게 한다.)
+            missing = p.enabled and not p.has_local_folder()
+            if missing:
+                mark += " ⚠ 폴더 미지정"
             self.profile_list.insert("end", p.name + mark)
+            if missing:
+                # 방금 삽입된 항목(마지막 인덱스)을 경고색으로 강조
+                self.profile_list.itemconfig(self.profile_list.size() - 1,
+                                             foreground="#b00020")
 
     def _selected_index(self):
         sel = self.profile_list.curselection()
@@ -515,10 +524,11 @@ class SettingsWindow:
         if self.on_save:
             self.on_save(self.cfg)
 
-        need_local = [p.name for p in self.cfg.profiles if not p.local_folder.strip()]
+        need_local = [p.name for p in self.cfg.profiles if not p.has_local_folder()]
         msg = f"가져오기 완료 — 추가 {added}개 / 갱신 {updated}개"
         if need_local:
-            msg += ("\n\n아래 프로필은 로컬 폴더를 지정해야 합니다:\n - "
+            msg += ("\n\n가져온 프로필은 로컬 세이브 폴더를 각각 지정해야 동기화됩니다.\n"
+                    "지정 전까지 아래 프로필은 동기화에서 건너뜁니다:\n - "
                     + "\n - ".join(need_local))
         messagebox.showinfo("가져오기 완료", msg)
 

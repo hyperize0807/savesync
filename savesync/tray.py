@@ -67,6 +67,9 @@ class TrayApp:
         )
         self._last_summary = "아직 동기화 안 됨"
         self._last_time = ""
+        # 자동 동기화에서 '폴더 미지정으로 건너뜀' 알림을 띄운 프로필 집합.
+        # 같은 상태가 매 주기마다 반복 알림되는 것을 막아 1회성으로 만든다.
+        self._notified_missing: set[str] = set()
 
     # ---------- 로깅/알림 ----------
     def _log_and_notify(self, msg: str):
@@ -107,6 +110,10 @@ class TrayApp:
             # 변경이 없으면 알림을 띄우지 않는다(불필요한 알림 방지).
         except Exception:
             pass
+
+        # 로컬 세이브 폴더가 지정되지 않아 건너뛴 활성 프로필을 1회성으로 알린다.
+        # (sync_all 이 건너뛰는 조건과 동일: 활성 & 폴더 미지정)
+        self._notify_skipped_profiles()
         # 설정 창이 열려 있으면 결과/로그 갱신
         if self._settings is not None:
             try:
@@ -114,6 +121,30 @@ class TrayApp:
                 self.root.after(0, self._settings._refresh_log)
             except Exception:
                 pass
+
+    def _notify_skipped_profiles(self):
+        """폴더 미지정으로 건너뛴 활성 프로필을 1회성 트레이 알림으로 알린다.
+
+        미지정 프로필 집합이 바뀔 때만(새로 생기거나 구성이 달라질 때) 알림을
+        띄우고, 모두 해소되면 추적을 비워 다음에 다시 생기면 또 알릴 수 있게 한다.
+        """
+        missing = {p.name for p in self.cfg.profiles
+                   if p.enabled and not p.has_local_folder()}
+        if not missing:
+            self._notified_missing.clear()
+            return
+        if missing == self._notified_missing:
+            return  # 같은 상태는 다시 알리지 않는다(1회성)
+        self._notified_missing = missing
+        try:
+            names = ", ".join(sorted(missing))
+            self.icon.notify(
+                f"로컬 세이브 폴더가 지정되지 않아 건너뜀: {names}\n"
+                f"설정 > 프로필에서 폴더를 지정하세요.",
+                "SaveSync — 동기화되지 않은 프로필",
+            )
+        except Exception:
+            pass
 
     # ---------- 메뉴 콜백 (트레이 스레드 → Tk 스레드로 마샬) ----------
     def _menu_open_settings(self, icon=None, item=None):
