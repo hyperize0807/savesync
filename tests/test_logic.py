@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -46,28 +47,36 @@ class FakeDrive:
     def __init__(self):
         self.files: dict[str, dict] = {}
         self._next_id = 1
+        self._lock = threading.Lock()  # 병렬 동기화 테스트용 스레드 안전 보장
 
     def list_files_recursive(self, root_id):
-        return {
-            rel: {"id": rel, "modified_epoch": m["modified_epoch"], "size": len(m["bytes"])}
-            for rel, m in self.files.items()
-        }
+        with self._lock:
+            return {
+                rel: {"id": rel, "modified_epoch": m["modified_epoch"],
+                      "size": len(m["bytes"])}
+                for rel, m in self.files.items()
+            }
 
     def upload_new(self, root_id, rel_path, local_file: Path):
-        self.files[rel_path] = {
+        entry = {
             "bytes": local_file.read_bytes(),
             "modified_epoch": local_file.stat().st_mtime,
         }
+        with self._lock:
+            self.files[rel_path] = entry
         return rel_path
 
     def update_existing(self, file_id, local_file: Path):
-        self.files[file_id] = {
+        entry = {
             "bytes": local_file.read_bytes(),
             "modified_epoch": local_file.stat().st_mtime,
         }
+        with self._lock:
+            self.files[file_id] = entry
 
     def download_bytes(self, file_id):
-        return self.files[file_id]["bytes"]
+        with self._lock:
+            return self.files[file_id]["bytes"]
 
 
 def write(p: Path, content: str, mtime: float | None = None):
@@ -382,6 +391,48 @@ def test_child_env_scrubs_pyinstaller_vars():
     check(out.get("PATH") == "x" and out.get("NORMAL") == "keep", "일반 변수 보존")
 
 
+def test_parallel_uploads_many_files():
+    print("test_parallel_uploads_many_files (다수 파일 병렬 업로드)")
+    with tempfile.TemporaryDirectory() as d:
+        local = Path(d) / "local"; local.mkdir()
+        n = 30
+        for i in range(n):
+            write(local / f"s{i:03d}.sav", f"DATA{i}")
+        drive = FakeDrive()
+        stats = sync_profile(drive, base_cfg(),
+                             make_profile(local, Rules(include_extensions=[".sav"])),
+                             max_workers=8)
+        check(stats.uploaded_new == n, f"{n}개 전부 신규 업로드 집계")
+        check(len(drive.files) == n, f"드라이브에 {n}개 모두 존재")
+        check(not stats.errors, "오류 없음")
+        # 내용 정합성(경합으로 뒤섞이지 않았는지)
+        ok = all(drive.files[f"s{i:03d}.sav"]["bytes"] == f"DATA{i}".encode()
+                 for i in range(n))
+        check(ok, "각 파일 내용이 정확히 매칭(경합 없음)")
+
+
+def test_parallel_mixed_directions():
+    print("test_parallel_mixed_directions (병렬 양방향 신규)")
+    with tempfile.TemporaryDirectory() as d:
+        local = Path(d) / "local"; local.mkdir()
+        for i in range(10):
+            write(local / f"up{i}.sav", f"U{i}")       # 로컬에만 → 업로드
+        drive = FakeDrive()
+        for i in range(10):
+            drive.files[f"dn{i}.sav"] = {"bytes": f"D{i}".encode(),
+                                         "modified_epoch": time.time()}  # 드라이브에만 → 다운로드
+        stats = sync_profile(drive, base_cfg(),
+                             make_profile(local, Rules(include_extensions=[".sav"])),
+                             max_workers=8)
+        check(stats.uploaded_new == 10 and stats.downloaded_new == 10,
+              "업로드 10 / 다운로드 10 집계")
+        check(all((local / f"dn{i}.sav").exists() for i in range(10)),
+              "드라이브 전용 10개 모두 로컬로 다운로드됨")
+        check(all(drive.files.get(f"up{i}.sav") for i in range(10)),
+              "로컬 전용 10개 모두 업로드됨")
+        check(not stats.errors, "오류 없음")
+
+
 def test_connect_falls_back_on_revoked_token():
     print("test_connect_falls_back_on_revoked_token")
     from unittest import mock
@@ -446,7 +497,8 @@ def main():
               test_merge_adds_new_with_empty_local, test_export_import_round_trip,
               test_parse_version, test_is_newer, test_pick_asset,
               test_render_update_script, test_child_env_scrubs_pyinstaller_vars,
-              test_connect_falls_back_on_revoked_token]:
+              test_connect_falls_back_on_revoked_token,
+              test_parallel_uploads_many_files, test_parallel_mixed_directions]:
         t()
     print()
     if _failures:

@@ -23,14 +23,17 @@ import io
 import logging
 import socket
 import ssl
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httplib2
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload, MediaIoBaseDownload
@@ -114,7 +117,12 @@ class DriveError(Exception):
 class DriveClient:
     def __init__(self):
         self.service = None
+        self._creds = None
         self._folder_cache: dict[tuple[str, str], str] = {}  # (parent_id, name) -> id
+        # 병렬 전송용: httplib2 는 스레드 안전하지 않으므로 스레드마다 http 를 둔다.
+        self._tlocal = threading.local()
+        # 폴더 조회+생성을 원자적으로 만들어 중복 생성/캐시 경합을 막는 락.
+        self._folder_lock = threading.RLock()
 
     # ---------- 인증 ----------
     @staticmethod
@@ -161,6 +169,9 @@ class DriveClient:
             with open(tok, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
 
+        self._creds = creds
+        # 새로 연결하면 스레드별 http 캐시를 비운다(옛 creds 를 물고 있을 수 있으므로).
+        self._tlocal = threading.local()
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
     def _reconnect(self) -> None:
@@ -176,20 +187,41 @@ class DriveClient:
         if self.service is None:
             raise DriveError("연결되지 않았습니다. connect() 를 먼저 호출하세요.")
 
+    def _http(self):
+        """스레드별 독립 http 를 돌려준다.
+
+        httplib2(=service 내부 http)는 스레드 안전하지 않으므로, 병렬 전송 시
+        각 스레드는 자기 http 로 요청을 실행해야 한다(request.execute(http=...)).
+        """
+        http = getattr(self._tlocal, "http", None)
+        if http is None:
+            http = AuthorizedHttp(self._creds, http=httplib2.Http())
+            self._tlocal.http = http
+        return http
+
     # ---------- 폴더 ----------
     @_retry_on_connection
     def _create_folder(self, name: str, parent_id: str) -> str:
         meta = {"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]}
         created = self.service.files().create(
             body=meta, fields="id", supportsAllDrives=True
-        ).execute()
+        ).execute(http=self._http())
         self._folder_cache[(parent_id, name)] = created["id"]
         return created["id"]
 
+    def _get_or_create_folder(self, parent_id: str, name: str) -> str:
+        """parent 아래 name 폴더를 찾거나 만든다(조회+생성을 원자적으로).
+
+        병렬 업로드에서 여러 스레드가 같은 하위 폴더를 동시에 만들려다 중복
+        폴더가 생기거나 캐시가 경합하는 것을 막기 위해 락으로 보호한다.
+        """
+        with self._folder_lock:
+            return (self._find_child_folder(parent_id, name)
+                    or self._create_folder(name, parent_id))
+
     def _ensure_app_root(self) -> str:
         """내 드라이브 최상위에 'SaveSync' 폴더를 찾거나 만든다."""
-        return (self._find_child_folder("root", APP_ROOT_FOLDER)
-                or self._create_folder(APP_ROOT_FOLDER, "root"))
+        return self._get_or_create_folder("root", APP_ROOT_FOLDER)
 
     def ensure_profile_folder(self, profile_folder_name: str) -> str:
         """'SaveSync/<이름>' 하위 폴더를 찾거나 만들어 그 ID 를 반환한다.
@@ -201,7 +233,7 @@ class DriveClient:
         self._ensure()
         app_root = self._ensure_app_root()
         name = (profile_folder_name or "").strip() or "기본"
-        return self._find_child_folder(app_root, name) or self._create_folder(name, app_root)
+        return self._get_or_create_folder(app_root, name)
 
     @_retry_on_connection
     def _find_child_folder(self, parent_id: str, name: str) -> str | None:
@@ -213,7 +245,7 @@ class DriveClient:
         res = self.service.files().list(
             q=q, fields="files(id,name)", pageSize=1,
             supportsAllDrives=True, includeItemsFromAllDrives=True,
-        ).execute()
+        ).execute(http=self._http())
         files = res.get("files", [])
         if files:
             self._folder_cache[key] = files[0]["id"]
@@ -229,10 +261,7 @@ class DriveClient:
         for part in rel_dir.split("/"):
             if not part:
                 continue
-            child = self._find_child_folder(parent, part)
-            if child is None:
-                child = self._create_folder(part, parent)
-            parent = child
+            parent = self._get_or_create_folder(parent, part)
         return parent
 
     # ---------- 파일 목록 ----------
@@ -255,7 +284,7 @@ class DriveClient:
                     fields="nextPageToken, files(id,name,mimeType,modifiedTime,size)",
                     pageSize=1000, pageToken=page_token,
                     supportsAllDrives=True, includeItemsFromAllDrives=True,
-                ).execute()
+                ).execute(http=self._http())
                 for f in res.get("files", []):
                     rel = f"{prefix}{f['name']}" if not prefix else f"{prefix}/{f['name']}"
                     if f["mimeType"] == FOLDER_MIME:
@@ -288,7 +317,7 @@ class DriveClient:
         media = MediaFileUpload(str(local_file), resumable=True)
         created = self.service.files().create(
             body=body, media_body=media, fields="id", supportsAllDrives=True
-        ).execute()
+        ).execute(http=self._http())
         return created["id"]
 
     @_retry_on_connection
@@ -302,13 +331,14 @@ class DriveClient:
             body={"modifiedTime": epoch_to_rfc3339(mtime)},
             media_body=media,
             supportsAllDrives=True,
-        ).execute()
+        ).execute(http=self._http())
 
     @_retry_on_connection
     def download_bytes(self, file_id: str) -> bytes:
         """파일 내용을 메모리로 다운로드."""
         self._ensure()
         req = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        req.http = self._http()  # 스레드별 http (MediaIoBaseDownload 는 req.http 사용)
         buf = io.BytesIO()
         downloader = MediaIoBaseDownload(buf, req)
         done = False
@@ -321,7 +351,7 @@ class DriveClient:
         self._ensure()
         meta = self.service.files().get(
             fileId=file_id, fields="modifiedTime", supportsAllDrives=True
-        ).execute()
+        ).execute(http=self._http())
         return rfc3339_to_epoch(meta["modifiedTime"])
 
     # ---------- SaveSync 루트의 메타 파일(JSON) ----------
@@ -333,7 +363,7 @@ class DriveClient:
         res = self.service.files().list(
             q=q, fields="files(id,name)", pageSize=1,
             supportsAllDrives=True, includeItemsFromAllDrives=True,
-        ).execute()
+        ).execute(http=self._http())
         files = res.get("files", [])
         return files[0]["id"] if files else None
 
@@ -359,8 +389,8 @@ class DriveClient:
             self.service.files().create(
                 body={"name": filename, "parents": [root]},
                 media_body=media, fields="id", supportsAllDrives=True,
-            ).execute()
+            ).execute(http=self._http())
         else:
             self.service.files().update(
                 fileId=fid, media_body=media, supportsAllDrives=True,
-            ).execute()
+            ).execute(http=self._http())
