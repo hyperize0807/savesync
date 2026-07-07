@@ -11,6 +11,7 @@ import json
 import threading
 import tkinter as tk
 import webbrowser
+from contextlib import contextmanager
 from tkinter import filedialog, messagebox, ttk
 
 from . import config as config_mod
@@ -55,17 +56,25 @@ class SettingsWindow:
         except Exception:
             pass
 
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=8, pady=8)
+        # 미저장 변경 추적 상태. 탭/프로필/창을 만들기 전에 초기화해야
+        # 초기 자동 선택이 발생시키는 이벤트 핸들러가 안전하게 no-op 된다.
+        self._ready = False
+        self._suppress_select = False
+        self._suppress_tab = False
+        self._loaded_index = None
+        self._clean_snapshot = None
 
-        self.tab_profiles = ttk.Frame(nb)
-        self.tab_general = ttk.Frame(nb)
-        self.tab_account = ttk.Frame(nb)
-        self.tab_log = ttk.Frame(nb)
-        nb.add(self.tab_profiles, text="프로필")
-        nb.add(self.tab_general, text="일반")
-        nb.add(self.tab_account, text="계정")
-        nb.add(self.tab_log, text="로그")
+        self.nb = ttk.Notebook(self.root)
+        self.nb.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.tab_profiles = ttk.Frame(self.nb)
+        self.tab_general = ttk.Frame(self.nb)
+        self.tab_account = ttk.Frame(self.nb)
+        self.tab_log = ttk.Frame(self.nb)
+        self.nb.add(self.tab_profiles, text="프로필")
+        self.nb.add(self.tab_general, text="일반")
+        self.nb.add(self.tab_account, text="계정")
+        self.nb.add(self.tab_log, text="로그")
 
         self._build_profiles_tab()
         self._build_general_tab()
@@ -76,7 +85,16 @@ class SettingsWindow:
         bar.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(bar, text="지금 동기화", command=self._sync_now).pack(side="left")
         ttk.Button(bar, text="저장", command=self._save).pack(side="right")
-        ttk.Button(bar, text="닫기", command=self.root.destroy).pack(side="right", padx=6)
+        ttk.Button(bar, text="닫기", command=self._on_close).pack(side="right", padx=6)
+
+        # 미저장 변경 확인: 프로필 전환 / 탭 이동 / 창 닫기 를 가로챈다.
+        self.nb.bind("<<NotebookTabChanged>>", lambda e: self._on_tab_changed())
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._current_tab = self.nb.index("current")
+        if self.cfg.profiles:
+            self._loaded_index = self._selected_index()
+        self._ready = True
+        self._mark_clean()
 
     # ---------------- 프로필 탭 ----------------
     def _build_profiles_tab(self):
@@ -87,7 +105,7 @@ class SettingsWindow:
         ttk.Label(left, text="프로필 목록").pack(anchor="w")
         self.profile_list = tk.Listbox(left, width=24, height=20, exportselection=False)
         self.profile_list.pack(fill="y", expand=True)
-        self.profile_list.bind("<<ListboxSelect>>", lambda e: self._load_selected_profile())
+        self.profile_list.bind("<<ListboxSelect>>", lambda e: self._on_profile_select())
 
         btns = ttk.Frame(left)
         btns.pack(fill="x", pady=4)
@@ -162,8 +180,6 @@ class SettingsWindow:
         ttk.Label(right, text="※ 확장자/패턴을 모두 비우면 폴더 내 모든 파일이 대상이 됩니다.",
                   foreground="#888", wraplength=380, justify="left").grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
-        ttk.Button(right, text="현재 입력을 프로필에 적용", command=self._apply_profile_fields).grid(
-            row=row, column=1, sticky="w", pady=8)
 
         right.columnconfigure(1, weight=1)
 
@@ -192,11 +208,17 @@ class SettingsWindow:
         return sel[0] if sel else None
 
     def _add_profile(self):
+        # 새 프로필로 전환되므로 현재 편집 중인 미저장 변경을 먼저 확인
+        if not self._guard_unsaved():
+            return
         self.cfg.profiles.append(Profile(name=f"프로필 {len(self.cfg.profiles)+1}"))
-        self._refresh_profile_list()
-        self.profile_list.selection_clear(0, "end")
-        self.profile_list.selection_set("end")
+        new_i = len(self.cfg.profiles) - 1
+        with self._suppressed_select():
+            self._refresh_profile_list()
+            self._set_profile_selection(new_i)
+        self._loaded_index = new_i
         self._load_selected_profile()
+        self._mark_clean()
 
     def _del_profile(self):
         i = self._selected_index()
@@ -204,7 +226,14 @@ class SettingsWindow:
             return
         if messagebox.askyesno("삭제", f"'{self.cfg.profiles[i].name}' 프로필을 삭제할까요?"):
             del self.cfg.profiles[i]
-            self._refresh_profile_list()
+            new_i = min(i, len(self.cfg.profiles) - 1) if self.cfg.profiles else None
+            with self._suppressed_select():
+                self._refresh_profile_list()
+                self._set_profile_selection(new_i)
+            self._loaded_index = new_i
+            if new_i is not None:
+                self._load_selected_profile()
+            self._mark_clean()
 
     def _load_selected_profile(self):
         i = self._selected_index()
@@ -220,26 +249,141 @@ class SettingsWindow:
         self.v_excl.set(", ".join(p.rules.exclude_globs))
         self.v_recursive.set(p.rules.recursive)
 
-    def _apply_profile_fields(self):
-        i = self._selected_index()
-        if i is None:
-            messagebox.showinfo("알림", "먼저 프로필을 선택하세요.")
-            return
-        p = self.cfg.profiles[i]
-        p.name = self.v_name.get().strip() or p.name
-        p.enabled = self.v_enabled.get()
-        p.local_folder = self.v_local.get().strip()
-        p.drive_folder_name = self.v_drive_name.get().strip()
-        p.drive_folder_id = ""  # 이름으로 매 동기화 시 해석/생성하므로 캐시를 비운다
-        p.rules = Rules(
-            include_extensions=_split_exts(self.v_exts.get()),
-            include_globs=_split_csv(self.v_incl.get()),
-            exclude_globs=_split_csv(self.v_excl.get()),
-            recursive=self.v_recursive.get(),
+    # ---------------- 미저장 변경 추적 ----------------
+    @contextmanager
+    def _suppressed_select(self):
+        old = self._suppress_select
+        self._suppress_select = True
+        try:
+            yield
+        finally:
+            self._suppress_select = old
+
+    @contextmanager
+    def _suppressed_tab(self):
+        old = self._suppress_tab
+        self._suppress_tab = True
+        try:
+            yield
+        finally:
+            self._suppress_tab = old
+
+    def _set_profile_selection(self, i):
+        self.profile_list.selection_clear(0, "end")
+        if i is not None:
+            self.profile_list.selection_set(i)
+            self.profile_list.activate(i)
+
+    def _capture_form(self):
+        """폼(프로필 편집 필드 + 일반 탭)의 현재 값을 스냅샷 튜플로 만든다."""
+        def g(var):
+            try:
+                return var.get()
+            except Exception:
+                return None
+        return (
+            g(self.v_name), g(self.v_enabled), g(self.v_local), g(self.v_drive_name),
+            g(self.v_exts), g(self.v_incl), g(self.v_excl), g(self.v_recursive),
+            g(self.v_policy), g(self.v_auto_sync), g(self.v_interval),
+            g(self.v_backup), g(self.v_backup_dir),
         )
-        self._refresh_profile_list()
-        self.profile_list.selection_set(i)
-        messagebox.showinfo("적용됨", "프로필에 반영되었습니다. (저장 버튼으로 디스크에 기록)")
+
+    def _mark_clean(self):
+        self._clean_snapshot = self._capture_form()
+
+    def _is_dirty(self) -> bool:
+        return self._ready and self._capture_form() != self._clean_snapshot
+
+    def _prompt_unsaved(self) -> str:
+        """저장/아니오/취소 → 'save' | 'discard' | 'cancel'."""
+        ans = messagebox.askyesnocancel(
+            "저장되지 않은 변경",
+            "변경 사항이 아직 저장되지 않았습니다. 저장하시겠습니까?")
+        if ans is None:
+            return "cancel"
+        return "save" if ans else "discard"
+
+    def _reset_general_from_cfg(self):
+        self.v_policy.set(POLICY_LABELS.get(self.cfg.conflict_policy,
+                                            POLICY_LABELS[CONFLICT_NEWER]))
+        self.v_auto_sync.set(self.cfg.auto_sync_enabled)
+        self.v_interval.set(self.cfg.interval_minutes)
+        self.v_backup.set(self.cfg.backup_enabled)
+        self.v_backup_dir.set(self.cfg.backup_dir)
+        self._on_auto_sync_toggle()
+
+    def _reload_form_from_cfg(self):
+        """저장된 설정 기준으로 폼 전체를 되돌린다(미저장 변경 폐기)."""
+        with self._suppressed_select():
+            self._reset_general_from_cfg()
+            if self._loaded_index is not None:
+                self._set_profile_selection(self._loaded_index)
+                self._load_selected_profile()
+
+    def _guard_unsaved(self) -> bool:
+        """미저장 변경이 있으면 묻는다. 진행 가능하면 True, '취소'면 False.
+
+        '저장'이면 저장하고, '아니오'면 일반 탭 값을 되돌린다(프로필 편집 필드는
+        호출부에서 곧 다시 로드되므로 여기서 건드리지 않는다).
+        """
+        if not self._is_dirty():
+            return True
+        ans = self._prompt_unsaved()
+        if ans == "cancel":
+            return False
+        if ans == "save":
+            with self._suppressed_select():
+                self._save_quiet()
+        else:
+            with self._suppressed_select():
+                self._reset_general_from_cfg()
+        return True
+
+    def _on_profile_select(self):
+        if not self._ready or self._suppress_select:
+            return
+        target = self._selected_index()
+        if target is None or target == self._loaded_index:
+            return
+        # 저장 판단은 '이전 프로필' 기준이어야 하므로 선택을 잠시 되돌린다.
+        with self._suppressed_select():
+            self._set_profile_selection(self._loaded_index)
+        if not self._guard_unsaved():
+            return  # 취소 → 이전 프로필 유지
+        with self._suppressed_select():
+            self._set_profile_selection(target)
+        self._loaded_index = target
+        self._load_selected_profile()
+        self._mark_clean()
+
+    def _on_tab_changed(self):
+        if not self._ready or self._suppress_tab:
+            return
+        new_tab = self.nb.index("current")
+        if new_tab == self._current_tab:
+            return
+        if self._is_dirty():
+            ans = self._prompt_unsaved()
+            if ans == "cancel":
+                with self._suppressed_tab():
+                    self.nb.select(self._current_tab)
+                return
+            if ans == "save":
+                with self._suppressed_select():
+                    self._save_quiet()
+            else:
+                self._reload_form_from_cfg()
+        self._current_tab = new_tab
+        self._mark_clean()
+
+    def _on_close(self):
+        if self._is_dirty():
+            ans = self._prompt_unsaved()
+            if ans == "cancel":
+                return
+            if ans == "save":
+                self._save_quiet()
+        self.root.destroy()
 
     def _browse_local(self):
         d = filedialog.askdirectory(title="로컬 세이브 폴더 선택")
@@ -387,11 +531,13 @@ class SettingsWindow:
 
     def _save(self):
         # 현재 편집 중인 프로필 필드를 반영하고 목록(이름 등)을 즉시 갱신
-        self._apply_and_refresh()
-        self._collect_general()
+        with self._suppressed_select():
+            self._apply_and_refresh()
+            self._collect_general()
         config_mod.save(self.cfg)
         if self.on_save:
             self.on_save(self.cfg)
+        self._mark_clean()
         messagebox.showinfo("저장됨", "설정을 저장했습니다.")
 
     def _apply_and_refresh(self):
@@ -430,11 +576,13 @@ class SettingsWindow:
                 messagebox.showinfo("동기화", "동기화를 시작했습니다. (트레이 로그/알림 참고)")
 
     def _save_quiet(self):
-        self._apply_and_refresh()
-        self._collect_general()
+        with self._suppressed_select():
+            self._apply_and_refresh()
+            self._collect_general()
         config_mod.save(self.cfg)
         if self.on_save:
             self.on_save(self.cfg)
+        self._mark_clean()
 
     # ---------------- 프로필 목록 클라우드 공유 ----------------
     def _require_auth(self) -> bool:
@@ -448,7 +596,8 @@ class SettingsWindow:
         """프로필 목록을 Google Drive의 SaveSync 루트에 내보낸다."""
         if not self._require_auth():
             return
-        self._apply_and_refresh()
+        with self._suppressed_select():
+            self._apply_and_refresh()
         if not self.cfg.profiles:
             messagebox.showinfo("알림", "내보낼 프로필이 없습니다.")
             return
@@ -479,6 +628,7 @@ class SettingsWindow:
             config_mod.save(self.cfg)
             if self.on_save:
                 self.on_save(self.cfg)
+            self._mark_clean()
             messagebox.showinfo(
                 "내보내기 완료",
                 f"{len(self.cfg.profiles)}개 프로필을 드라이브에 저장했습니다.\n"
@@ -515,14 +665,16 @@ class SettingsWindow:
             messagebox.showerror("오류", f"프로필 목록을 읽을 수 없습니다:\n{e}")
             return
 
-        self._refresh_profile_list()
-        if self.cfg.profiles:
-            self.profile_list.selection_clear(0, "end")
-            self.profile_list.selection_set(0)
-            self._load_selected_profile()
+        with self._suppressed_select():
+            self._refresh_profile_list()
+            if self.cfg.profiles:
+                self._set_profile_selection(0)
+                self._loaded_index = 0
+                self._load_selected_profile()
         config_mod.save(self.cfg)
         if self.on_save:
             self.on_save(self.cfg)
+        self._mark_clean()
 
         need_local = [p.name for p in self.cfg.profiles if not p.has_local_folder()]
         msg = f"가져오기 완료 — 추가 {added}개 / 갱신 {updated}개"
