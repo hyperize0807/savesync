@@ -1,6 +1,6 @@
 # SaveSync
 
-PC 고전게임의 세이브파일을 **Google Drive**와 자동 동기화하는 Windows 트레이 앱.
+PC 고전게임의 세이브파일을 **Google Drive**와 자동 동기화하는 트레이 앱 (Windows / macOS).
 
 게임 루트 폴더처럼 실행파일과 세이브가 섞여 있어도 **확장자/패턴 규칙**으로
 동기화 대상만 골라낼 수 있고, 덮어쓰기 전에는 **항상 백업**합니다.
@@ -37,6 +37,33 @@ Python 설치가 필요 없습니다. 릴리스 exe 하나면 됩니다.
 
 > **부팅 시 자동 시작**: `SaveSync.exe` 의 바로가기를 만들어 `shell:startup`
 > (Win+R 에 입력) 폴더에 넣으면 부팅 시 자동으로 트레이에 상주합니다.
+
+## macOS에서 사용 (소스 실행)
+
+macOS 는 릴리스 실행파일 없이 소스로 실행합니다. 동기화 로직·설정 화면은
+Windows 와 동일하며, Windows PC 와 같은 Google 계정으로 연결하면 동일한
+Drive 폴더를 통해 이어서 플레이할 수 있습니다.
+
+요구사항: Python 3.10+ 과 Tk (Homebrew 기준 `brew install python-tk`)
+
+```bash
+git clone https://github.com/hyperize0807/savesync
+cd savesync
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m savesync        # 메뉴 막대(상태바)에 아이콘 상주
+```
+
+- **로그인 시 자동 시작**: `scripts/macos/install-autostart.sh` 를 한 번 실행
+  (해제는 `--uninstall` 인자 추가)
+- **업데이트**: `git pull` 후 앱 재시작. 의존성이 바뀐 경우
+  `.venv/bin/pip install -r requirements.txt` 재실행.
+- **데이터 위치**: `~/.savesync/` (Windows 의 `%APPDATA%\SaveSync` 에 해당,
+  구성 파일 이름은 동일)
+- **Windows 와 다른 점**
+  - 메뉴 막대 아이콘은 더블클릭 대신 **클릭 → "설정 열기"** 로 엽니다.
+  - 인앱 자동 교체 업데이트는 Windows exe 전용입니다. macOS 에서는 새 버전이
+    있으면 릴리스 페이지를 열어 주며, 실제 갱신은 `git pull` 로 합니다.
 
 ## ① Google Drive 연결 (최초 1회)
 

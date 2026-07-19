@@ -19,11 +19,20 @@ from typing import Iterator
 
 from .config import Rules
 
+# OS가 만드는 메타데이터 파일 — 세이브가 아니므로 규칙과 무관하게 항상 제외.
+# (macOS: .DS_Store, AppleDouble '._*' / Windows: Thumbs.db, desktop.ini)
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+JUNK_PREFIXES = ("._",)
+
 
 def matches(rel_path: str, rules: Rules) -> bool:
     """rel_path(상대경로, 파일명 포함)가 규칙에 맞으면 True."""
     name = os.path.basename(rel_path)
     name_lower = name.lower()
+
+    # 0) OS 메타데이터 파일은 무조건 제외
+    if name_lower in JUNK_NAMES or name_lower.startswith(JUNK_PREFIXES):
+        return False
 
     # 1) 제외 규칙
     for pat in rules.exclude_globs:
