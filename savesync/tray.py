@@ -1,4 +1,7 @@
-"""시스템 트레이 앱.
+"""시스템 트레이 앱 (Windows/Linux).
+
+macOS 는 tkinter 와 pystray(PyObjC)를 한 프로세스에서 함께 쓸 수 없어
+별도 구현(tray_darwin.py)을 사용한다 — __main__.py 에서 분기.
 
 구조
 ----
@@ -10,7 +13,6 @@
 from __future__ import annotations
 
 import queue
-import sys
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -25,10 +27,6 @@ from .config import CONFLICT_ASK
 from .drive import DriveClient
 from .gui import SettingsWindow
 from .scheduler import SyncScheduler
-
-# macOS 는 AppKit UI 를 메인 스레드에서만 허용하므로 트레이 아이콘 실행/종료
-# 방식이 다르다 (run() / _quit() 의 분기 참고).
-_IS_MAC = sys.platform == "darwin"
 
 
 class TrayApp:
@@ -245,28 +243,14 @@ class TrayApp:
         try:
             self.scheduler.stop()
         finally:
-            try:
-                if _IS_MAC:
-                    # run_detached 모드에서 stop() 은 Tk 가 돌리는 NSApp 루프를
-                    # 건드리므로, 아이콘만 숨기고 프로세스 종료로 정리한다.
-                    self.icon.visible = False
-                else:
-                    self.icon.stop()
-            except Exception:
-                pass
+            self.icon.stop()
             self.root.quit()
 
     # ---------- 실행 ----------
     def run(self):
         self.scheduler.start()
-        if _IS_MAC:
-            # 상태바 아이콘 등록만 하고, 이벤트는 메인 스레드의 Tk mainloop 가
-            # Cocoa 루프를 돌리며 함께 처리한다. (별도 스레드에서 icon.run() 을
-            # 돌리면 AppKit 의 메인 스레드 제약에 걸린다.)
-            self.icon.run_detached()
-        else:
-            # 트레이 아이콘은 별도 스레드에서
-            threading.Thread(target=self.icon.run, name="TrayIcon", daemon=True).start()
+        # 트레이 아이콘은 별도 스레드에서
+        threading.Thread(target=self.icon.run, name="TrayIcon", daemon=True).start()
         self.log.info("SaveSync 시작됨 (트레이 상주)")
         self.root.mainloop()
 

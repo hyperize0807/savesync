@@ -29,14 +29,23 @@ def _sync_once() -> int:
 
 
 def _settings_only() -> int:
-    from . import config as config_mod, logsetup
+    from . import config as config_mod, logsetup, paths
     from .drive import DriveClient
     from .gui import SettingsWindow
 
     logsetup.setup()
     cfg = config_mod.load()
     drive = DriveClient()
-    SettingsWindow(cfg, drive).show()  # 자체 Tk 루트 + mainloop
+
+    on_sync_now = None
+    if sys.platform == "darwin":
+        # macOS 의 설정 창은 트레이와 별도 프로세스다. '지금 동기화'는 트리거
+        # 파일로 트레이 프로세스에 요청한다 (tray_darwin.py 가 2초마다 감시).
+        def on_sync_now() -> bool:
+            paths.sync_trigger_path().touch()
+            return True
+
+    SettingsWindow(cfg, drive, on_sync_now=on_sync_now).show()  # 자체 Tk 루트 + mainloop
     return 0
 
 
@@ -51,7 +60,11 @@ def main() -> int:
     if args.settings:
         return _settings_only()
 
-    from .tray import main as tray_main
+    if sys.platform == "darwin":
+        # macOS 는 tkinter+pystray 를 한 프로세스에서 쓸 수 없어 전용 구현 사용
+        from .tray_darwin import main as tray_main
+    else:
+        from .tray import main as tray_main
     tray_main()
     return 0
 

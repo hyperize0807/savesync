@@ -41,3 +41,11 @@ def default_backup_dir() -> Path:
 
 def log_path() -> Path:
     return app_dir() / "savesync.log"
+
+
+def sync_trigger_path() -> Path:
+    """'지금 동기화' 요청 트리거 파일 (macOS: 설정 프로세스 → 트레이 프로세스).
+
+    macOS 는 설정 창이 별도 프로세스라(tray_darwin.py 참고) 파일로 신호를 보낸다.
+    """
+    return app_dir() / "sync-now.trigger"

@@ -62,6 +62,11 @@ python3 -m venv .venv
   구성 파일 이름은 동일)
 - **Windows 와 다른 점**
   - 메뉴 막대 아이콘은 더블클릭 대신 **클릭 → "설정 열기"** 로 엽니다.
+  - 설정 창은 **별도 프로세스**로 뜹니다(macOS 에서는 tkinter 와 트레이를 한
+    프로세스에 둘 수 없음). 저장하면 트레이가 자동으로 다시 읽습니다.
+    설정 창이 떠 있는 동안 왼쪽 상단 앱 메뉴 이름이 "Python" 으로 보이는 것은
+    소스 실행 방식의 외관상 한계로, 기능과는 무관합니다.
+  - 충돌 정책 `매번 물어보기`는 macOS 기본 대화상자(osascript)로 묻습니다.
   - 인앱 자동 교체 업데이트는 Windows exe 전용입니다. macOS 에서는 새 버전이
     있으면 릴리스 페이지를 열어 주며, 실제 갱신은 `git pull` 로 합니다.
 
@@ -248,7 +253,8 @@ savesync/
   scheduler.py    # 주기 타이머
   updater.py      # 인앱 자동 업데이트(GitHub 릴리스 확인·교체·재시작)
   gui.py          # Tkinter 설정 창
-  tray.py         # 시스템 트레이 앱
+  tray.py         # 시스템 트레이 앱 (Windows/Linux)
+  tray_darwin.py  # 메뉴 막대 앱 (macOS — 설정 창을 별도 프로세스로 실행)
   __main__.py     # 진입점
 ```
 
